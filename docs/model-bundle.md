@@ -1,6 +1,6 @@
 # light-ocr Model Bundle
 
-Status: Implemented bundle contract; controlled mirror pending  
+Status: Implemented bundle contract; controlled npm model distribution accepted, publication pending<br>
 Authority: model identity, bundle schema, normalized configuration, integrity, and licensing  
 Requirements: [requirements.md](requirements.md)
 
@@ -53,7 +53,7 @@ The 2026-07-13 bootstrap download produced:
 | Recognition `inference.onnx` | 21,159,378 | `5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634` |
 | Recognition `inference.yml` | 150,579 | `ab078671bb49f06228eadccd34f1bb501e157f7a047095ffb943ba81512c77d1` |
 
-The values above are bootstrap observations from the official URLs. Release automation downloads, verifies, mirrors, and records them again; any byte-count or hash change blocks the release until explicitly reviewed.
+The values above are bootstrap observations from the official URLs. Release automation downloads, verifies, stages them into the controlled npm model package, and records them again; any byte-count or hash change blocks the release until explicitly reviewed.
 
 ## 4. Bundle layout
 
@@ -84,7 +84,7 @@ Integrity avoids circular hashes:
 2. `SHA256SUMS` contains hashes for all payload files plus `manifest.json`; it excludes itself.
 3. `tools/package_model_bundle.py` creates a deterministic USTAR archive and verifies its identity against `models/bundles.lock.json`.
 4. The locked archive is 31,334,400 bytes with SHA-256 `d320b799ed77511e3743c36d2f23bd8cbcd80d8070d5431f4fb0ec80daa800da`.
-5. A controlled mirror must store that exact archive. The lock currently has `mirror: null`, so this external release step is not yet complete.
+5. `@arcships/light-ocr-model-ppocrv6-small` must contain the exact unpacked bundle files and record its npm tarball SHA-256/integrity. Publishing that verified package is the v1 controlled redistribution path. `mirror: null` only means the standalone USTAR archive has no separate mirror; it does not trigger runtime download and is not a prerequisite for the npm topology.
 
 Runtime bundle validation verifies:
 
@@ -314,7 +314,7 @@ The release pipeline:
 7. Runs oracle configuration export and stage probes.
 8. Writes manifest, licenses, and checksums.
 9. Runs parity and performance gates.
-10. Archives and mirrors the immutable bundle.
+10. Archives the immutable bundle, stages its exact unpacked files into the npm model package, and optionally mirrors the standalone USTAR for non-npm consumers.
 
 Production recognition performs no download or conversion.
 
@@ -325,7 +325,7 @@ The PaddleOCR repository and official model cards declare Apache-2.0. The bundle
 - The exact PaddleOCR license text from the pinned revision.
 - Model source URLs and revisions.
 - A notice naming detection and recognition artifacts.
-- Generation and mirror metadata.
+- Generation and distribution metadata.
 
 Release automation verifies license metadata again. A missing license record blocks the bundle.
 

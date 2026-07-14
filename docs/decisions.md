@@ -104,10 +104,17 @@ Consequence: Later adapters map the contract without flattening boxes or redefin
 
 ### D101 — Use an asynchronous, bounded Node-API v8 adapter
 
-Status: Accepted; source implementation complete, release matrix pending  
-Decision: The first Node.js adapter follows [napi-design.md](napi-design.md): raw Node-API with `NAPI_VERSION=8`, Promise APIs, one dedicated FIFO worker per engine, bounded request and snapshot-byte admission, copied raw-pixel inputs, AbortSignal cooperative cancellation, explicit async close, and environment-scoped cleanup. It supports Node.js 22/24 first and uses local caller-supplied model bundles only.  
+Status: Accepted; source implementation complete, release matrix pending<br>
+Decision: The first Node.js adapter follows [napi-design.md](napi-design.md): raw Node-API with `NAPI_VERSION=8`, Promise APIs, one dedicated FIFO worker per engine, bounded request and snapshot-byte admission, copied raw-pixel inputs, AbortSignal cooperative cancellation, explicit async close, and environment-scoped cleanup. It supports Node.js 22/24 first. The native boundary still receives one local bundle directory; the published JS facade supplies the built-in model package path by default and accepts an explicit `bundlePath` override.<br>
 Reason: The synchronous one-call Core needs an adapter-owned scheduling and lifetime boundary that does not block JavaScript, consume libuv's shared worker pool, or permit caller mutation of in-flight image bytes.  
-Consequence: Core OCR semantics and errors remain authoritative. Queued abort removes work; running abort discards delivery but does not interrupt inference. Encoded images, zero-copy, hard interruption, model download/mirror integration, Electron/Bun, and additional platforms remain separate extensions.
+Consequence: Core OCR semantics and errors remain authoritative. Queued abort removes work; running abort discards delivery but does not interrupt inference. Encoded images, zero-copy, hard interruption, runtime model download/update, Electron/Bun, and additional platforms remain separate extensions.
+
+### D105 — Publish a lockstep @arcships package set with a required default model
+
+Status: Accepted; implementation pending<br>
+Decision: The public entry is `@arcships/light-ocr`. It has one exact-version normal dependency on `@arcships/light-ocr-model-ppocrv6-small` and exact-version optional dependencies on four platform native packages, as specified in [npm-packaging.md](npm-packaging.md). The model package carries the unpacked, hash-locked PP-OCRv6 small bundle; `createEngine()` uses it without a required `bundlePath`. No package runs install/postinstall downloads or source-build fallbacks.<br>
+Reason: Users should perform one npm installation and then create an engine without a second model acquisition step, while avoiding four duplicated copies of the same model across native packages.<br>
+Consequence: Six packages release in lockstep. The facade is published last, after the model and native packages pass sterile tarball installation. A separate model-free flavor, multiple model selection, runtime updating and non-npm model mirrors are not v1 completion requirements.
 
 ## 3. Deferred decisions
 
@@ -126,7 +133,7 @@ Each is a separately versioned capability or bundle and requires its own compati
 ### D104 — External distribution operations
 
 Status: Deferred  
-Deferred items: public download destination, signing, macOS notarization, Windows code signing, package retention, and end-user support policy. Internal immutable storage is sufficient for Core acceptance.
+Deferred items: standalone non-npm model download destination, signing, macOS notarization, Windows code signing, long-term registry/package retention, and end-user support policy. npm package topology and built-in model behavior are resolved by D105; actual public publication still requires its release gates.
 
 ## 4. Bootstrap and evidence records
 
@@ -136,7 +143,7 @@ These are not unresolved semantic choices. Their current completion state is tra
 | --- | --- | --- |
 | Native dependency lock | `models/deps.lock.json` | Complete locally; Tier 1 use awaits CI evidence |
 | Toolchain/CI identity | `.github/workflows/core.yml` plus generated build manifest | Configured; remote run evidence pending |
-| Bundle lock and archive | `models/bundles.lock.json`, generated bundle and USTAR checksum | Hash complete; controlled mirror pending |
+| Bundle lock and archive | `models/bundles.lock.json`, generated bundle and USTAR checksum | Hash complete; npm model staging and registry evidence pending |
 | Oracle environment lock | `oracle/oracle.lock.json`, `oracle/requirements.lock` | Complete and locally exercised |
 | Corpus manifest | `corpus/sources.lock.json`, `contracts.json`, fixture manifests | Complete for current 14-fixture parity corpus; clean regeneration and contract evidence are verified |
 | Benchmark declaration/report | `oracle/run_benchmark.py`, generated benchmark report | Local reference run passed; controlled CI report pending |

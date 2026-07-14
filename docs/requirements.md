@@ -40,7 +40,7 @@ The current milestone includes:
 
 ### 2.2 Later milestone: language adapters
 
-N-API implementation, npm publication, Electron support, and Bun support are not part of this Core milestone. The later Node.js adapter is now designed in [napi-design.md](napi-design.md); implementing it MUST NOT require rewriting OCR algorithms or changing the semantic result contract.
+N-API implementation, npm publication, Electron support, and Bun support are not part of this Core milestone. The later Node.js adapter is now designed and source-implemented in [napi-design.md](napi-design.md); packaging remains pending and MUST NOT require rewriting OCR algorithms or changing the semantic result contract.
 
 The current milestone does not promise a stable C ABI, a stable cross-release C++ ABI, or a separately supported end-user C++ SDK distribution.
 

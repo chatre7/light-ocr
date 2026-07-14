@@ -1,10 +1,10 @@
 # light-ocr Node-API 适配器设计
 
-状态：v1 源码已实现；Node.js 22/macOS arm64 本地验证通过，四平台预编译与发布矩阵待完成  
+状态：v1 adapter 源码已实现；`@arcships` npm 与内置模型契约已接受，打包实现和四平台发布矩阵待完成<br>
 更新时间：2026-07-14  
 Authority：JavaScript/TypeScript API、异步调度、内存所有权、Node.js 生命周期与 npm 布局  
 Core contract：[native-api.md](native-api.md)  
-Decision：[decisions.md](decisions.md) D101
+Decision：[decisions.md](decisions.md) D101、D105
 
 ## 1. 结论
 
@@ -17,10 +17,11 @@ Decision：[decisions.md](decisions.md) D101
 - `createEngine`、`recognize` 和 `close` 都返回 Promise，OCR 推理不占用 JavaScript 线程，也不占用 Node.js/libuv 共享工作池。
 - `recognize` 从 v1 起接受 `AbortSignal`：queued 请求真正取消，running 请求立即停止向调用方交付结果，但 native inference 安全运行到结束。
 - `recognize` 返回前复制调用所需的 raw pixel 字节。调用返回后，调用方可以立即复用或修改原 Buffer。
-- 运行时只读取调用方显式提供的本地 bundle 目录；不联网、不下载模型、不启动进程、不依赖 cwd 或环境变量。
+- 发布后的 `@arcships/light-ocr` 默认使用随 npm dependency 安装的 PP-OCRv6 small bundle；调用方无需另行下载或配置模型。
+- JS facade 把内置模型解析为绝对 bundle 目录后交给 native 层。engine 创建和识别不联网、不下载模型、不启动进程、不依赖 cwd 或环境变量。
 - Core 的错误码、几何、置信度、固定阶段 timing 和 diagnostics 原义保留。
 
-本设计不把模型镜像作为 N-API 的前置条件。镜像、公开下载地址和模型分发包仍属于独立发布工作；适配器只要求调用方提供已经存在的本地 bundle。
+模型与平台二进制的 npm 拆包、版本和发布契约见 [npm-packaging.md](npm-packaging.md)。Core 和 native addon 仍只理解本地 bundle 目录；npm package 解析由 JS facade 负责，不把 registry 或模型发现逻辑下沉到 C++。
 
 ## 2. 目标与非目标
 
@@ -32,12 +33,13 @@ Decision：[decisions.md](decisions.md) D101
 4. 与 C++ Core 做字段级、错误级和结果级 parity。
 5. 复用 Core 的模型验证、资源限制和 OCR 算法，不在适配器复制业务逻辑。
 6. 为四个 Core Tier 1 目标提供 Node-API 预编译包。
+7. `npm install @arcships/light-ocr` 同时取得默认模型，正常调用 `createEngine()` 不需要 `bundlePath`。
 
 ### 2.2 v1 非目标
 
 - PNG、JPEG、WebP、PDF 等 encoded input 解码。
-- 网络下载、模型发现、默认模型目录或模型自动更新。
-- 模型镜像和模型 npm 包。
+- install/postinstall 或运行时网络下载、默认目录扫描或模型自动更新。
+- 无模型瘦包、按语言拆分模型、tiny/medium/orientation 模型。
 - 对运行中的 ONNX Runtime inference 做硬中断或强制超时终止。
 - GPU/Metal/CUDA/DirectML Execution Provider。
 - Electron、Bun、Deno 或浏览器支持声明。
@@ -49,10 +51,11 @@ Decision：[decisions.md](decisions.md) D101
 
 ## 3. 公共 TypeScript API
 
-逻辑 import 名称使用 `light-ocr`。最终 npm scope 和 registry 名称属于外部分发决策，不影响本节 API。
+公开 import 名称固定为 `@arcships/light-ocr`。
 
 ```ts
 export type PixelFormat = "gray8" | "rgb8" | "bgr8" | "rgba8";
+export type BuiltInModel = "ppocrv6-small";
 
 export interface RawImage {
   readonly data: Uint8Array;
@@ -74,8 +77,10 @@ export interface ResourceLimits {
 }
 
 export interface CreateEngineOptions {
-  /** Existing absolute directory containing one complete light-ocr bundle. */
-  readonly bundlePath: string;
+  /** Built-in package model. Defaults to ppocrv6-small. */
+  readonly model?: BuiltInModel;
+  /** Advanced override: existing absolute directory containing one complete bundle. */
+  readonly bundlePath?: string;
   readonly intraOpThreads?: number;
   readonly interOpThreads?: number;
   readonly recognitionScoreThreshold?: number;
@@ -192,7 +197,9 @@ export type CoreErrorCode =
 export type AdapterErrorCode =
   | "bundle_io_failed"
   | "queue_full"
-  | "environment_closing";
+  | "environment_closing"
+  | "unsupported_platform"
+  | "package_load_failed";
 
 export type OcrErrorCode = CoreErrorCode | AdapterErrorCode;
 
@@ -211,20 +218,19 @@ export interface OcrEngine {
   close(): Promise<void>;
 }
 
-export function createEngine(options: CreateEngineOptions): Promise<OcrEngine>;
+export function createEngine(options?: CreateEngineOptions): Promise<OcrEngine>;
 ```
 
 `Buffer` 是 `Uint8Array` 的子类，因此可以直接作为 `RawImage.data`。v1 不接受 `DataView`、其他 TypedArray 或以 `SharedArrayBuffer` 为 backing store 的 `Uint8Array`。
 
-`OcrEngine` 没有 public constructor，只能由成功的 `createEngine` 创建。`reducedLimits` 一旦提供就必须包含全部八个字段；适配器把 Core 固定的 `maxConcurrentCalls=1` 补入 native options。所有配置对象拒绝未知 own property，避免拼写错误被静默忽略。预期的参数、I/O、Core 和队列错误都通过 Promise rejection 返回 `OcrError`；取消按 `AbortSignal.reason` 拒绝，默认 `AbortController.abort()` 因而得到标准 `AbortError`。只有非法 receiver、Node-API 无法创建 Promise 或不可恢复的运行时故障可能同步抛出。
+`OcrEngine` 没有 public constructor，只能由成功的 `createEngine` 创建。未传 `model`/`bundlePath` 时默认使用内置 `ppocrv6-small`；二者同时出现是 `invalid_argument`。`reducedLimits` 一旦提供就必须包含全部八个字段；适配器把 Core 固定的 `maxConcurrentCalls=1` 补入 native options。所有配置对象拒绝未知 own property，避免拼写错误被静默忽略。预期的参数、package、I/O、Core 和队列错误都通过 Promise rejection 返回 `OcrError`；取消按 `AbortSignal.reason` 拒绝，默认 `AbortController.abort()` 因而得到标准 `AbortError`。只有非法 receiver、Node-API 无法创建 Promise 或不可恢复的运行时故障可能同步抛出。
 
 ### 3.1 使用示例
 
 ```ts
-import { createEngine } from "light-ocr";
+import { createEngine } from "@arcships/light-ocr";
 
 const engine = await createEngine({
-  bundlePath: "/opt/light-ocr/ppocrv6-small-onnx-20260713.1",
   queueCapacity: 4,
 });
 
@@ -265,7 +271,7 @@ Core timing 的 `uint64_t` 映射为 JavaScript `number`。转换前必须检查
 
 ## 5. Bundle 输入与文件安全
 
-`bundlePath` 必须是当前平台的绝对目录路径。适配器不把相对路径转换为绝对路径，不读取 cwd、环境变量或默认目录。`createEngine` 的 Promise 只在下列步骤全部成功后 resolve：
+JS facade 先确定 effective bundle path：默认或 `model: "ppocrv6-small"` 从必需的 `@arcships/light-ocr-model-ppocrv6-small` dependency 取得只读绝对路径；显式 `bundlePath` 则必须是当前平台的绝对目录路径。适配器不扫描默认目录，不把相对路径转换为绝对路径，也不读取 cwd 或环境变量寻找模型。`createEngine` 的 Promise 只在下列步骤全部成功后 resolve：
 
 1. 安全打开 bundle 根目录。
 2. 枚举并读取完整文件集合。
@@ -285,7 +291,7 @@ Core timing 的 `uint64_t` 映射为 JavaScript `number`。转换前必须检查
 
 POSIX 实现使用 directory-relative、no-follow 的打开方式；Windows 使用 handle-based traversal 并拒绝 reparse point。测试必须包含 symlink/reparse point、TOCTOU 替换、深层目录、超限文件、重复和读到一半被截断。
 
-适配器不会读取 `.tar`/`.zip`，也不会联网补文件。压缩包解包和模型取得发生在运行进程之外。
+适配器不会读取 `.tar`/`.zip`，也不会联网补文件。model package 直接携带解包后的 bundle 目录；安装和 registry 下载发生在运行进程之外。
 
 ## 6. 输入验证与所有权
 
@@ -438,13 +444,15 @@ Abort 不保证节省已经开始的 CPU 时间，也不是安全隔离边界。
 
 ## 10. 错误契约
 
-Core 返回的 13 个 `ErrorCode` 逐字映射到 `OcrError.code`，message/detail 不改变含义。适配器只新增三个稳定 code：
+Core 返回的 13 个 `ErrorCode` 逐字映射到 `OcrError.code`，message/detail 不改变含义。适配器新增五个稳定 code：
 
 | Code | 条件 |
 | --- | --- |
 | `bundle_io_failed` | bundle 路径、权限、安全遍历或完整读取失败；尚未进入 Core bundle validation |
 | `queue_full` | 当前 engine 的请求数或 pending-input byte budget 已被占满 |
 | `environment_closing` | Node.js Environment 已开始 teardown，但当前调用仍能安全返回 rejection |
+| `unsupported_platform` | 当前 OS、architecture 或 libc 不在发布支持矩阵 |
+| `package_load_failed` | 支持的平台 package 或必需 model package 缺失、损坏、版本/identity 不匹配 |
 
 结构性 API 错误使用 `invalid_argument`；image metadata/view 不合法使用 `invalid_image`；单请求超过 adapter/Core 限制使用 `resource_limit_exceeded`；close 后调用使用 `invalid_engine`。不把 queue backpressure 伪装成 inference failure。
 
@@ -509,26 +517,28 @@ bindings/node/
   package.json
 ```
 
-公共 JS package 只含 JavaScript、`.d.ts` 和平台选择器；平台 native package 作为 optional dependency：
+发布包统一位于 `@arcships` scope。完整 layout、manifest、版本、发布顺序和 release gates 以 [npm package 设计](npm-packaging.md) 为准；本节只记录 N-API 相关边界。
 
 ```text
-light-ocr                         public JS/TS facade
-light-ocr-darwin-arm64            addon + ONNX Runtime dylib + licenses
-light-ocr-darwin-x64              addon + ONNX Runtime dylib + licenses
-light-ocr-win32-x64               addon + onnxruntime.dll + licenses
-light-ocr-linux-x64-gnu           addon + ONNX Runtime so + licenses
+@arcships/light-ocr                              public JS/TS facade
+@arcships/light-ocr-model-ppocrv6-small          required model bundle
+@arcships/light-ocr-darwin-arm64                 addon + ONNX Runtime dylib + licenses
+@arcships/light-ocr-darwin-x64                   addon + ONNX Runtime dylib + licenses
+@arcships/light-ocr-win32-x64                    addon + onnxruntime.dll + licenses
+@arcships/light-ocr-linux-x64-gnu                addon + ONNX Runtime so + licenses
 ```
 
-这些是逻辑名称，最终 registry 名称由 D104 决定。facade 同时提供 ESM 和 CommonJS exports，但两者加载同一个 environment-aware `.node` addon。native 子路径不作为 public export。
+Facade 同时提供 ESM 和 CommonJS exports，但两者加载同一个 environment-aware `.node` addon。native 子路径不作为 public export。model package 是 exact-version 普通 dependency；四个平台包是 exact-version optional dependencies，由 `os`、`cpu` 和 Linux `libc` metadata 筛选。
 
 安装规则：
 
-- 正常安装不运行下载脚本，不下载模型，不在用户机器隐式编译。
+- 正常安装不运行 install/postinstall 脚本，不在用户机器隐式编译。模型只作为 npm package payload 由 npm 在安装阶段取得。
+- model package 直接包含可读取的 bundle 目录；JS facade 解析绝对路径，native loader 不解压、不联网。
 - 平台包包含 `.node`、锁定的 ONNX Runtime 动态库、third-party licenses、SBOM 和 artifact hash。
 - macOS 保持最低 13.3；Windows 使用 MSVC 2022 x64；Linux x64 GNU 基线在首次 N-API release 前用专用构建容器固定，不能把 Ubuntu 24.04 runner 偶然产生的 glibc 要求当作长期 SDK 承诺。
 - macOS/Linux 使用相对 loader path，Windows DLL 与 `.node` 同目录。
 - source build 是显式开发命令，不是 install fallback。
-- v1 不包含模型文件；`bundlePath` 始终由部署者提供。
+- 使用 `--omit=optional` 会缺少 native package；facade 必须返回可操作的 `package_load_failed`，不能尝试下载或编译。
 
 Node-API 解决 Node/V8 ABI 兼容，不消除 OS、architecture、libc、C++ runtime 和 ONNX Runtime 的平台差异。因此仍需四个平台的原生构建和加载测试。
 
@@ -551,7 +561,7 @@ Node-API 解决 Node/V8 ABI 兼容，不消除 OS、architecture、libc、C++ ru
 - TypeScript compile tests 覆盖所有 public types、ESM 和 CJS。
 - 每个 `EngineInfo`、`OcrResult`、diagnostics、rejected line、warning 和 timing 字段与 C++ 对照。
 - 四种 pixel format、padding stride、view byteOffset、1×1、边界尺寸、bad stride、truncated view 和 unsupported orientation。
-- 每个 Core error code 的逐字映射；三个 adapter error code 的稳定行为。
+- 每个 Core error code 的逐字映射；五个 adapter error code 的稳定行为。
 - 真实 PP-OCRv6 bundle 的 14-fixture golden parity；同一 raw bytes 的文本、confidence 和 box 与 Core 一致。
 
 ### 14.2 所有权、队列与并发
@@ -587,6 +597,14 @@ Node-API 解决 Node/V8 ABI 兼容，不消除 OS、architecture、libc、C++ ru
 - 用高频 timer/heartbeat 证明 inference 期间 JavaScript event loop 可继续运行；同步 snapshot 停顿单独报告。
 - 多 engine benchmark 必须记录 engine 数、ORT thread 数、CPU 和内存，防止以隐式 oversubscription 制造错误结论。
 
+### 14.6 npm package contract
+
+- 从六个本地 `.tgz` 在 sterile 临时目录安装；CJS、ESM 和 types 都只能使用 package 内容，不能回读仓库。
+- `createEngine()`、`createEngine({})` 和 `model: "ppocrv6-small"` 都加载同一 bundle ID；显式 `bundlePath` 仍工作；`model` 与 `bundlePath` 同时提供时拒绝。
+- model package 缺失、bundle ID 不匹配、支持平台 package 缺失、unsupported platform 和 `--omit=optional` 分别得到稳定、可操作的错误。
+- `--ignore-scripts` 安装正常；已安装后禁网运行正常；没有 postinstall、下载、解压或源码编译副作用。
+- `npm pack --dry-run` inventory、tarball hashes、model payload hashes、licenses、SBOM 和 package exact versions 全部核对。
+
 完整 release gate 在 macOS arm64、macOS x64、Windows x64、Linux x64 GNU 上分别运行 Node 22 和 24；Node 26 运行加载、创建、golden、close 和 worker teardown smoke。
 
 ## 15. 实施顺序
@@ -598,7 +616,7 @@ Node-API 解决 Node/V8 ABI 兼容，不消除 OS、architecture、libc、C++ ru
 5. **完成**：实现 explicit close、GC finalizer、dispatcher ref/unref 和 teardown-safe environment cleanup。
 6. **部分完成**：Node.js 22/macOS arm64 已覆盖 event-loop heartbeat、正常退出和未 close 的 worker environment teardown；worker termination、compatible-host sanitizer、leak 和多平台性能矩阵仍待补。
 7. 固定 Linux GNU baseline，构建四个平台 prebuild，生成 licenses/SBOM/hashes。
-8. 最后发布 JS facade 和平台 optional packages；模型分发仍由部署者独立处理。
+8. 生成 model、四个平台 native 和 facade 六个 package，执行 sterile tarball install test；先发布五个依赖，最后发布 `@arcships/light-ocr` facade。
 
 前五步完成前不能把 addon 称为可用；四平台矩阵、发布元数据和 prebuild 完成前不能称为 npm release ready。
 
@@ -606,8 +624,8 @@ Node-API 解决 Node/V8 ABI 兼容，不消除 OS、architecture、libc、C++ ru
 
 | 项目 | v1 状态 | 重新开启条件 |
 | --- | --- | --- |
-| 模型镜像/公开下载 | 延期 | D104 确定不可变制品仓、签名和 retention |
-| 模型 npm 包 | 延期 | 镜像和许可证/体积/更新策略确定 |
+| 独立模型镜像/公开下载页 | 延期 | npm model package 已满足默认安装；仅在需要非 npm 分发时重开 |
+| 无模型或多模型 package | 延期 | 有真实体积/语言/服务端部署需求并定义兼容策略 |
 | encoded image | 延期 | 独立 decoder 依赖、安全限制和格式矩阵获批 |
 | zero-copy/transfer | 延期 | 能证明 mutation、detachment、Worker 和 teardown 安全 |
 | running inference 硬中断 | 延期 | Core 或隔离层提供经过验证的安全 interruption |

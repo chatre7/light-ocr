@@ -1,8 +1,17 @@
 {
-  "name": "light-ocr",
+  "name": "@arcships/light-ocr",
   "version": "0.1.0",
   "private": true,
   "description": "Node-API adapter for the light-ocr C++ core",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arcships/light-ocr.git"
+  },
+  "homepage": "https://github.com/arcships/light-ocr#readme",
+  "bugs": {
+    "url": "https://github.com/arcships/light-ocr/issues"
+  },
   "type": "commonjs",
   "main": "./js/index.cjs",
   "module": "./js/index.mjs",

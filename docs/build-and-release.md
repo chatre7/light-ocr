@@ -9,7 +9,7 @@
 
 当前交付物是 C++17 静态库 `light_ocr_core`、三个标准库公共头文件、验证工具、真实 PP-OCRv6 模型 bundle 和验收报告。Core 运行时不包含 Python；Python 仅用于测试 oracle、语料生成和发布元数据。
 
-这不是稳定 ABI、公共 C ABI、包管理器 SDK 或已发布的 npm 包。仓库已有可选的 Node-API 源码适配器，但它不改变本 Core 交付边界，也尚无四平台 prebuild。外部安装布局属于 D102；因此仓库当前不提供容易被误认为完整 SDK 的 `cmake --install` 规则。仓库内消费者应通过 `add_subdirectory` 使用 `light_ocr::core`，发布验证包主要服务验收，不构成长期二进制兼容承诺。
+这不是稳定 ABI、公共 C ABI、包管理器 SDK 或已发布的 npm 包。仓库已有可选的 Node-API 源码适配器，并已接受 `@arcships` 六包发布设计，但它不改变本 Core 交付边界，也尚无四平台 prebuild。外部 C++ 安装布局属于 D102；因此仓库当前不提供容易被误认为完整 SDK 的 `cmake --install` 规则。仓库内消费者应通过 `add_subdirectory` 使用 `light_ocr::core`，发布验证包主要服务验收，不构成长期二进制兼容承诺。
 
 ```cmake
 add_subdirectory(path/to/light-ocr)
@@ -96,7 +96,7 @@ ctest --preset release
 
 可用 preset：`dev`、`release`、`asan`、`tsan`、`fuzz`。Apple Clang 若没有 libFuzzer runtime，`fuzz` preset 会明确退化为固定 seed 的 standalone smoke driver；Linux CI 使用完整 Clang/libFuzzer。
 
-Node-API 是默认关闭的可选 target。开发构建需显式提供 Node headers，并使用调用方已有的本地模型 bundle；完整命令、API 和取消/生命周期说明见 [bindings/node/README.md](../bindings/node/README.md)。启用 `LIGHT_OCR_BUILD_NODE=ON` 和 `LIGHT_OCR_BUILD_TESTS=ON` 后，CTest 会在 Node executable 与生成 bundle 均存在时注册 `light_ocr_node_tests`。
+Node-API 是默认关闭的可选 target。开发构建需显式提供 Node headers，并使用调用方已有的本地模型 bundle；发布 package 则由 facade 注入随 npm 安装的默认 model bundle。完整命令、API 和取消/生命周期说明见 [bindings/node/README.md](../bindings/node/README.md)。启用 `LIGHT_OCR_BUILD_NODE=ON` 和 `LIGHT_OCR_BUILD_TESTS=ON` 后，CTest 会在 Node executable 与生成 bundle 均存在时注册 `light_ocr_node_tests`。
 
 ## 6. 构建目标
 
@@ -186,7 +186,7 @@ Linux CI 还把同一命令放入 `unshare --net` 网络命名空间并要求 `-
 - `safety`：Linux ASan+UBSan+LSan、TSan、四个 libFuzzer 入口。
 - `oracle`：hash-locked Python 环境、14 个语料的全阶段对齐、首 bundle 质量基线和相对性能门槛。
 
-Actions 均固定到 commit SHA。当前工作目录不是 Git 仓库，因此本机无法产生这套 GitHub Actions 的真实 run URL；工作流“已配置”不等于四平台“已通过”。发布候选必须保留每个 job 的不可变 run/artifact 证据。
+Actions 均固定到 commit SHA。当前已有本地 Git 仓库和初始 commit，但尚未产生这套 GitHub Actions 的真实 run URL；工作流“已配置”不等于四平台“已通过”。发布候选必须保留每个 job 的不可变 run/artifact 证据。
 
 ## 9. 发布元数据
 
@@ -212,14 +212,16 @@ bytes: 31334400
 sha256: d320b799ed77511e3743c36d2f23bd8cbcd80d8070d5431f4fb0ec80daa800da
 ```
 
+npm release 还需按 [npm-packaging.md](npm-packaging.md) 生成一个 facade、一个 model 和四个 native staging packages。model package 保存上述归档的精确解包内容；发布候选必须另外记录六个 npm tarballs 的 bytes、SHA-256 和 registry integrity，不能把 Core USTAR hash 当作 npm tarball hash。
+
 ## 10. 发布候选门槛
 
 1. 在带 revision 的干净 Git snapshot 上运行全部 CI。
 2. 四个 Tier 1 原生 job 全绿；不得用交叉编译替代。
 3. 保存 parity、quality、benchmark、leak、Sanitizer、fuzz 和 offline 报告。
-4. 为模型归档填写并验证受控不可变镜像地址；当前 `mirror: null` 明确表示此步未完成。
+4. 将精确 bundle 文件打入 `@arcships/light-ocr-model-ppocrv6-small`，验证 sterile install，并记录 npm tarball SHA-256/integrity。独立 USTAR mirror 是非 npm 分发项，不阻塞 npm package release。
 5. 为每个平台生成 manifest、许可证清单和 SBOM。
-6. 在隔离环境验证下载后的 package 和模型归档 SHA-256。
+6. 在隔离环境验证六个 npm tarballs、platform 选择、默认 `createEngine()` 和模型 payload hash；已安装后的运行测试必须禁网。
 7. 对照 [implementation-status.md](implementation-status.md) 关闭所有 Pending 项。
 
-发布、签名、公证、公共下载地址和保留策略仍按 D104 处理；这些外部操作不能由源码仓库中的“计划文字”冒充完成证据。
+registry 发布、签名、公证、非 npm 公共下载地址和保留策略仍需要外部操作；这些动作不能由源码仓库中的“计划文字”冒充完成证据。

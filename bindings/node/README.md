@@ -1,6 +1,6 @@
 # light-ocr Node-API adapter
 
-状态：v1 源码可用；Node.js 22/macOS arm64 已通过本地真实 PP-OCRv6 测试。四个平台的 Node.js 22/24 prebuild、签名和 npm 发布不在当前交付中。
+状态：v1 adapter 源码可用；Node.js 22/macOS arm64 已通过本地真实 PP-OCRv6 测试。公开入口已确定为 `@arcships/light-ocr`，默认模型 package 设计已接受；facade 默认解析、四平台 prebuild 和 npm 发布尚未实现。
 
 ## 能力边界
 
@@ -10,7 +10,7 @@
 - 输入只接受 `Uint8Array` raw pixels：`gray8`、`rgb8`、`bgr8`、`rgba8`。
 - `recognize()` 返回前同步复制本次调用实际需要的像素范围；调用返回后可以立即修改或复用原 Buffer。
 - 支持 `AbortSignal` 协作式取消：queued 请求会从队列移除；running 请求立即拒绝 public Promise，但 Core 会安全运行到返回并丢弃结果。
-- bundle 必须是调用方给出的现有绝对目录。适配器不联网、不下载模型、不读取默认目录。
+- native addon 只接收现有绝对 bundle 目录。当前源码开发调用显式传 `bundlePath`；发布后的 facade 默认使用随 npm 安装的 model package 路径。
 
 v1 不支持 encoded image、zero-copy/transfer、运行中 inference 硬中断、Electron 或 Bun。详细契约见 [Node-API 设计](../../docs/napi-design.md)。
 
@@ -46,9 +46,19 @@ node --test --test-concurrency=1 bindings/node/test/adapter.test.cjs
 # 或：ctest --test-dir build-node -R '^light_ocr_node_tests$' --output-on-failure
 ```
 
-生产加载器不会搜索任意 cwd。它只接受 `LIGHT_OCR_NODE_BINARY` 这一开发覆盖路径，或 package 内的 `js/native`、`prebuilds/<platform>-<arch>` 固定位置。
+当前源码加载器不会搜索任意 cwd。它只接受 `LIGHT_OCR_NODE_BINARY` 这一开发覆盖路径，或 package 内的 `js/native`、`prebuilds/<platform>-<arch>` 固定位置。发布 loader 将改为固定映射四个 `@arcships/light-ocr-<platform>` optional packages，详见 [npm package 设计](../../docs/npm-packaging.md)。
 
 ## 使用
+
+发布后的目标用法不需要模型路径：
+
+```js
+const { createEngine, OcrError } = require('@arcships/light-ocr');
+
+const engine = await createEngine({ queueCapacity: 4 });
+```
+
+当前源码开发用法仍需显式 bundle：
 
 CommonJS：
 
@@ -89,7 +99,7 @@ async function main() {
 main().catch(console.error);
 ```
 
-ESM 使用 `import { createEngine, OcrError } from './bindings/node/js/index.mjs'`。完整 TypeScript 类型位于 [index.d.ts](js/index.d.ts)。
+发布包的 ESM 使用 `import { createEngine, OcrError } from '@arcships/light-ocr'`；当前源码直接加载 `./bindings/node/js/index.mjs`。完整 TypeScript 类型位于 [index.d.ts](js/index.d.ts)，目标 package API 见 [Node-API 设计](../../docs/napi-design.md)。
 
 ## 背压与取消
 
