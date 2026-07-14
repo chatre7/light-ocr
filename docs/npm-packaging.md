@@ -1,6 +1,6 @@
 # @arcships/light-ocr npm Package Design
 
-状态：v1 设计与实现已完成；四平台产物、registry 发布和首次安装证据等待 `npm release` workflow<br>
+状态：v1 设计、实现与 `0.1.0` 六包发布已完成；[发布证据](releases/npm-0.1.0.md)<br>
 更新时间：2026-07-14<br>
 Authority：npm 包名、包拆分、依赖关系、内置模型、版本与发布门槛<br>
 Node API：[napi-design.md](napi-design.md)<br>
@@ -31,7 +31,7 @@ const engine = await createEngine();
 - engine 创建和识别期间不访问网络，不执行 shell，不运行下载脚本，也不读取 cwd 或用户环境变量来寻找模型。
 - `bundlePath` 继续作为显式高级覆盖入口，用于开发、测试或私有 bundle；它不是正常使用的前置配置。
 
-模型会增加 npm 安装流量和磁盘占用，但不会产生安装后的第二次下载。当前 bundle 的实际文件总量是 31,319,876 bytes；npm tarball 的压缩后大小必须由发布候选的 `npm pack` 报告记录，不能用估算值代替。
+模型会增加 npm 安装流量和磁盘占用，但不会产生安装后的第二次下载。`0.1.0` model tarball 为 26,091,093 bytes，解包后 package 为 31,332,789 bytes；完整 hash 与 registry integrity 见[发布记录](releases/npm-0.1.0.md)。
 
 ## 2. 包集合与依赖图
 
@@ -238,7 +238,7 @@ dist/npm/<six staging directories>
 
 `@arcships` scope 必须已由发布账号或组织控制。scoped package 的发布清单固定 `publishConfig.access: public`，发布流程也显式使用 public access，避免 scope 默认私有策略造成误配置。
 
-2026-07-14 使用 npm 11 查询时，六个拟用 public package 名均返回 `E404`；这说明当时没有可见的同名公开包，但不证明发布账号拥有 `@arcships` scope。
+2026-07-14 发布前使用 npm 11 查询时，六个 public package 名均返回 `E404`；同日成功 workflow 已证明发布身份控制 `@arcships` scope，并把六包 `0.1.0` 公开发布及提升到 `latest`。
 
 相关 npm 官方行为依据：
 

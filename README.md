@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/github/license/arcships/light-ocr)](LICENSE)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C.svg)](https://isocpp.org/)
 [![Node--API v8](https://img.shields.io/badge/Node--API-v8-339933.svg)](bindings/node/README.md)
-[![npm: coming soon](https://img.shields.io/badge/npm-%40arcships%2Flight--ocr%20coming%20soon-CB3837.svg)](docs/npm-packaging.md)
+[![npm](https://img.shields.io/npm/v/%40arcships%2Flight-ocr?color=CB3837)](https://www.npmjs.com/package/@arcships/light-ocr)
 
 English | [简体中文](README.zh-CN.md)
 
@@ -16,7 +16,7 @@ English | [简体中文](README.zh-CN.md)
 
 It is made for products where OCR should feel like a local capability: quick to invoke, private by default, and straightforward to embed into an existing image pipeline.
 
-> **Pre-release:** the C++ core and Node-API adapter source are available today. Prebuilt `@arcships` npm packages are being prepared and are not published yet. See [Package support](#package-support).
+> **Available on npm:** `@arcships/light-ocr@0.1.0` includes the default PP-OCRv6 Small model and prebuilt native runtimes for all Tier 1 platforms. See [Package support](#package-support).
 
 ## Where light-ocr fits
 
@@ -69,7 +69,35 @@ For each detected line, light-ocr returns the recognized text, a confidence scor
 
 Coordinates are quadrilaterals rather than axis-aligned rectangles, so rotated and perspective text can be represented without discarding geometry.
 
-## Try it from source
+## Get started
+
+### Node.js
+
+Node.js 22 and 24 are supported on macOS arm64/x64, Linux x64 glibc, and Windows x64:
+
+```bash
+npm install @arcships/light-ocr
+```
+
+The package installs the matching native runtime and the pinned PP-OCRv6 Small model. It does not download a model at first run or compile native code during `postinstall`.
+
+```ts
+import { createEngine } from "@arcships/light-ocr";
+
+const engine = await createEngine();
+const result = await engine.recognize({
+  data: pixels,
+  width,
+  height,
+  stride,
+  pixelFormat: "rgba8",
+});
+
+console.log(result.lines);
+await engine.close();
+```
+
+See the [Node.js guide](bindings/node/README.md) for the full API, cancellation, queue limits, and lifecycle behavior.
 
 ### C++ core
 
@@ -87,47 +115,23 @@ ctest --preset release
 
 See [Build and release](docs/build-and-release.md) for platform prerequisites and [C++ API](docs/native-api.md) for integration.
 
-### Node.js adapter
-
-The asynchronous Node-API adapter can be built from source; its current local release evidence is Node.js 22 on macOS arm64. Follow the [Node.js source guide](bindings/node/README.md).
-
-The intended package experience after the first npm release is:
-
-```ts
-import { createEngine } from "@arcships/light-ocr";
-
-const engine = await createEngine(); // bundled PP-OCRv6 Small model
-const result = await engine.recognize({
-  data: pixels,
-  width,
-  height,
-  stride,
-  pixelFormat: "rgba8",
-});
-
-console.log(result.lines);
-await engine.close();
-```
-
-No separate model download or postinstall compilation is planned for the published package.
-
 ## Package support
 
 | Distribution | Status | Platforms |
 | --- | --- | --- |
 | C++ core source | Available | macOS arm64/x64, Linux x64 glibc, Windows x64 |
-| Node-API adapter source | Available, pre-release | Currently verified with Node.js 22 on macOS arm64 |
-| `@arcships/light-ocr` | In progress, not yet on npm | Planned for Node.js 22 and 24 on all Tier 1 platforms |
-| `@arcships/light-ocr-model-ppocrv6-small` | In progress, not yet on npm | Platform-independent model package bundled as a required dependency |
-| Platform native npm packages | In progress, not yet on npm | macOS arm64/x64, Linux x64 glibc, Windows x64 |
+| Node-API adapter source | Available | Node.js 22 and 24 |
+| [`@arcships/light-ocr`](https://www.npmjs.com/package/@arcships/light-ocr) | `0.1.0` published | Node.js 22/24 on all Tier 1 platforms |
+| [`@arcships/light-ocr-model-ppocrv6-small`](https://www.npmjs.com/package/@arcships/light-ocr-model-ppocrv6-small) | `0.1.0` published | Platform-independent required model dependency |
+| Platform native npm packages | `0.1.0` published | macOS arm64/x64, Linux x64 glibc, Windows x64 |
 
-The npm distribution will install one facade, one required model package, and the native package matching the host platform. Package contents, versioning, and release gates are documented in [npm packaging](docs/npm-packaging.md).
+The npm distribution installs one facade, one required model package, and the native package matching the host platform. Package contents, versioning, and release gates are documented in [npm packaging](docs/npm-packaging.md); immutable `0.1.0` hashes and validation evidence are recorded in the [release record](docs/releases/npm-0.1.0.md).
 
 ## Project status
 
-`light-ocr` is under active development toward its first public package release. The native core, PP-OCRv6 bundle, high-resolution memory strategy, real-model corpus, and Node-API source adapter are implemented. The remaining release work is prebuilt Node.js binaries, package assembly, and npm publication.
+`light-ocr` is under active development. Version `0.1.0` is the first public npm release, with the native core, PP-OCRv6 bundle, high-resolution memory strategy, real-model corpus, Node-API adapter, and four-platform prebuilt packages in place.
 
-Until the first stable release, public APIs and package layout may still evolve; the project does not currently promise a stable cross-release C++ ABI.
+As a pre-1.0 project, public APIs and package layout may still evolve; the project does not currently promise a stable cross-release C++ ABI.
 
 The Core CI builds and tests the project on:
 

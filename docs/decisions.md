@@ -143,7 +143,7 @@ Each is a separately versioned capability or bundle and requires its own compati
 ### D104 — External distribution operations
 
 Status: Deferred  
-Deferred items: standalone non-npm model download destination, signing, macOS notarization, Windows code signing, long-term registry/package retention, and end-user support policy. npm package topology and built-in model behavior are resolved by D105; actual public publication still requires its release gates.
+Deferred items: standalone non-npm model download destination, signing, macOS notarization, Windows code signing, long-term registry/package retention, and end-user support policy. npm package topology and built-in model behavior are resolved by D105; public `0.1.0` publication and its release gates are recorded in [releases/npm-0.1.0.md](releases/npm-0.1.0.md).
 
 ## 4. Bootstrap and evidence records
 
@@ -153,10 +153,10 @@ These are not unresolved semantic choices. Their current completion state is tra
 | --- | --- | --- |
 | Native dependency lock | `models/deps.lock.json` | Complete and exercised by the latest Tier 1 CI run |
 | Toolchain/CI identity | `.github/workflows/core.yml` plus generated build manifest | Latest six-job Core workflow passed on Linux, Windows, and both macOS architectures |
-| Bundle lock and archive | `models/bundles.lock.json`, generated bundle and USTAR checksum | Hash complete; npm model staging and registry evidence pending |
+| Bundle lock and archive | `models/bundles.lock.json`, generated bundle and USTAR checksum | Hash complete; npm model staging and public registry evidence recorded for `0.1.0` |
 | Oracle environment lock | `oracle/oracle.lock.json`, `oracle/requirements.lock` | Complete and locally exercised |
 | Corpus manifest | `corpus/sources.lock.json`, `contracts.json`, fixture manifests | Complete for current 14-fixture parity corpus; clean regeneration and contract evidence are verified |
 | Benchmark declaration/report | `oracle/run_benchmark.py`, generated benchmark report | Local reference run and controlled Linux oracle CI passed; final release report must be regenerated after D013 |
 | Ground-truth report | `corpus/ground-truth.lock.json`, generated quality report | Complete local first-bundle text/detection baseline with pixel-bound independent boxes |
 
-The C++ implementation is complete, but the milestone cannot be declared release-complete until the Pending items above have immutable evidence.
+The C++ implementation and npm `0.1.0` release evidence are complete. Deferred C ABI/install layout and external distribution operations remain separate future decisions.

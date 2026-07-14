@@ -1,6 +1,6 @@
 # light-ocr Core 构建与发布
 
-状态：已实现；Tier 1 发布证据尚未全部产生  
+状态：已实现；Core Tier 1 与 npm `0.1.0` 发布证据已产生
 范围：C++ Core 的依赖锁、构建、测试、验证报告和发布候选制品  
 需求：[requirements.md](requirements.md)  
 当前状态：[implementation-status.md](implementation-status.md)
@@ -9,7 +9,7 @@
 
 当前交付物是 C++17 静态库 `light_ocr_core`、三个标准库公共头文件、验证工具、真实 PP-OCRv6 模型 bundle 和验收报告。Core 运行时不包含 Python；Python 仅用于测试 oracle、语料生成和发布元数据。
 
-这不是稳定 ABI、公共 C ABI、包管理器 SDK 或已发布的 npm 包。仓库已有可选的 Node-API 源码适配器，并已接受 `@arcships` 六包发布设计，但它不改变本 Core 交付边界，也尚无四平台 prebuild。外部 C++ 安装布局属于 D102；因此仓库当前不提供容易被误认为完整 SDK 的 `cmake --install` 规则。仓库内消费者应通过 `add_subdirectory` 使用 `light_ocr::core`，发布验证包主要服务验收，不构成长期二进制兼容承诺。
+Core 交付仍不是稳定 ABI、公共 C ABI 或 C++ 包管理器 SDK。Node.js 用户可以使用已发布的 `@arcships/light-ocr@0.1.0` 与四平台 prebuild，但这不改变 Core 的源码集成边界。外部 C++ 安装布局属于 D102；因此仓库当前不提供容易被误认为完整 SDK 的 `cmake --install` 规则。仓库内 C++ 消费者应通过 `add_subdirectory` 使用 `light_ocr::core`，发布验证包主要服务验收，不构成长期二进制兼容承诺。
 
 ```cmake
 add_subdirectory(path/to/light-ocr)

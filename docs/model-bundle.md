@@ -1,6 +1,6 @@
 # light-ocr Model Bundle
 
-Status: Implemented bundle contract; controlled npm model distribution accepted, publication pending<br>
+Status: Implemented bundle contract; controlled npm model package `0.1.0` published and verified<br>
 Authority: model identity, bundle schema, normalized configuration, integrity, and licensing  
 Requirements: [requirements.md](requirements.md)
 

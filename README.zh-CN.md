@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/github/license/arcships/light-ocr)](LICENSE)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C.svg)](https://isocpp.org/)
 [![Node--API v8](https://img.shields.io/badge/Node--API-v8-339933.svg)](bindings/node/README.md)
-[![npm：即将推出](https://img.shields.io/badge/npm-%40arcships%2Flight--ocr%20coming%20soon-CB3837.svg)](docs/npm-packaging.md)
+[![npm](https://img.shields.io/npm/v/%40arcships%2Flight-ocr?color=CB3837)](https://www.npmjs.com/package/@arcships/light-ocr)
 
 [English](README.md) | 简体中文
 
@@ -16,7 +16,7 @@
 
 这个项目面向希望把 OCR 做成真正本地能力的产品：随时调用、默认保护隐私，也能自然嵌入现有的图像处理流程。
 
-> **预发布状态：**C++ Core 和 Node-API 适配器源码目前已经可用。预编译的 `@arcships` npm packages 正在准备中，尚未发布。详见[包支持](#包支持)。
+> **npm 已可用：**`@arcships/light-ocr@0.1.0` 自带默认 PP-OCRv6 Small 模型，并为全部 Tier 1 平台提供预编译原生运行时。详见[包支持](#包支持)。
 
 ## 适合哪些场景
 
@@ -69,7 +69,35 @@
 
 位置使用四边形而不是普通矩形，因此可以保留旋转文字和透视文字的几何信息。
 
-## 从源码开始使用
+## 开始使用
+
+### Node.js
+
+Node.js 22 和 24 支持 macOS arm64/x64、Linux x64 glibc 与 Windows x64：
+
+```bash
+npm install @arcships/light-ocr
+```
+
+安装会自动取得当前平台的原生运行时和固定版本的 PP-OCRv6 Small 模型；首次运行不会再下载模型，`postinstall` 也不会现场编译原生代码。
+
+```ts
+import { createEngine } from "@arcships/light-ocr";
+
+const engine = await createEngine();
+const result = await engine.recognize({
+  data: pixels,
+  width,
+  height,
+  stride,
+  pixelFormat: "rgba8",
+});
+
+console.log(result.lines);
+await engine.close();
+```
+
+完整 API、取消、队列限制和生命周期行为见 [Node.js 指南](bindings/node/README.md)。
 
 ### C++ Core
 
@@ -87,47 +115,23 @@ ctest --preset release
 
 各平台的准备方式见[构建与发布](docs/build-and-release.md)，接入方式见 [C++ API](docs/native-api.md)。
 
-### Node.js 适配器
-
-异步 Node-API 适配器现在可以从源码构建；当前本地 release 证据是 macOS arm64 + Node.js 22。具体步骤见 [Node.js 源码指南](bindings/node/README.md)。
-
-首个 npm 版本发布后的目标用法是：
-
-```ts
-import { createEngine } from "@arcships/light-ocr";
-
-const engine = await createEngine(); // 自带 PP-OCRv6 Small 模型
-const result = await engine.recognize({
-  data: pixels,
-  width,
-  height,
-  stride,
-  pixelFormat: "rgba8",
-});
-
-console.log(result.lines);
-await engine.close();
-```
-
-正式 package 不计划使用额外模型下载，也不计划在 postinstall 阶段现场编译。
-
 ## 包支持
 
 | 分发方式 | 当前状态 | 平台 |
 | --- | --- | --- |
 | C++ Core 源码 | 可用 | macOS arm64/x64、Linux x64 glibc、Windows x64 |
-| Node-API 适配器源码 | 可用，预发布 | 当前已在 macOS arm64 + Node.js 22 完成验证 |
-| `@arcships/light-ocr` | 开发中，尚未发布到 npm | 计划支持全部 Tier 1 平台的 Node.js 22 和 24 |
-| `@arcships/light-ocr-model-ppocrv6-small` | 开发中，尚未发布到 npm | 与平台无关的模型 package，作为主包的必需依赖安装 |
-| 各平台 native npm packages | 开发中，尚未发布到 npm | macOS arm64/x64、Linux x64 glibc、Windows x64 |
+| Node-API 适配器源码 | 可用 | Node.js 22 和 24 |
+| [`@arcships/light-ocr`](https://www.npmjs.com/package/@arcships/light-ocr) | 已发布 `0.1.0` | 全部 Tier 1 平台的 Node.js 22/24 |
+| [`@arcships/light-ocr-model-ppocrv6-small`](https://www.npmjs.com/package/@arcships/light-ocr-model-ppocrv6-small) | 已发布 `0.1.0` | 与平台无关的必需模型依赖 |
+| 各平台 native npm packages | 已发布 `0.1.0` | macOS arm64/x64、Linux x64 glibc、Windows x64 |
 
-npm 分发将安装一个统一入口、一个必需的模型包，以及与当前系统匹配的 native 包。包内容、版本策略和发布门槛见 [npm package 设计](docs/npm-packaging.md)。
+npm 分发会安装一个统一入口、一个必需的模型包，以及与当前系统匹配的 native 包。包内容、版本策略和发布门槛见 [npm package 设计](docs/npm-packaging.md)；`0.1.0` 的不可变哈希和验证证据见[发布记录](docs/releases/npm-0.1.0.md)。
 
 ## 项目状态
 
-`light-ocr` 正在积极开发首个公开 package 版本。原生 Core、PP-OCRv6 bundle、大图内存策略、真实模型语料和 Node-API 源码适配器已经实现；剩余的主要发布工作是 Node.js 预编译产物、package 组装和 npm 发布。
+`light-ocr` 仍在积极开发。`0.1.0` 是首个公开 npm 版本，原生 Core、PP-OCRv6 bundle、大图内存策略、真实模型语料、Node-API 适配器与四平台预编译包均已就位。
 
-在首个稳定版本之前，公共 API 和 package 布局仍可能调整；项目目前不承诺跨版本稳定的 C++ ABI。
+作为 pre-1.0 项目，公共 API 和 package 布局仍可能调整；项目目前不承诺跨版本稳定的 C++ ABI。
 
 Core CI 当前覆盖：
 

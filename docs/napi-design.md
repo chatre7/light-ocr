@@ -1,6 +1,6 @@
 # light-ocr Node-API 适配器设计
 
-状态：v1 adapter 源码已实现；`@arcships` npm 与内置模型契约已接受，打包实现和四平台发布矩阵待完成<br>
+状态：v1 adapter 与 `@arcships/light-ocr@0.1.0` 已实现并发布；四平台 Node.js 22/24 matrix 已通过<br>
 更新时间：2026-07-14  
 Authority：JavaScript/TypeScript API、异步调度、内存所有权、Node.js 生命周期与 npm 布局  
 Core contract：[native-api.md](native-api.md)  

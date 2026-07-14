@@ -1,6 +1,14 @@
 # light-ocr Node-API adapter
 
-状态：v1 adapter 源码可用；Node.js 22/macOS arm64 已通过本地真实 PP-OCRv6 测试。facade 已实现默认模型解析和四平台 native package 选择；四平台 prebuild、Node.js 22/24 package matrix 与 npm registry 发布由手动 `npm release` workflow 生成，当前仍待取得首次远端发布证据。
+状态：v1 adapter 与 `@arcships/light-ocr@0.1.0` 已发布；macOS arm64/x64、Linux x64 glibc、Windows x64 的 Node.js 22/24 package matrix、真实 PP-OCRv6 和禁网运行均已通过。
+
+推荐直接安装公开 package：
+
+```bash
+npm install @arcships/light-ocr
+```
+
+安装会带上 PP-OCRv6 Small 模型与当前平台的预编译 native package；`createEngine()` 默认无需 `bundlePath`。以下本地构建说明用于修改或调试 adapter。
 
 ## 能力边界
 

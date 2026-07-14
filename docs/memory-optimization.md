@@ -1,6 +1,6 @@
 # light-ocr 高分辨率内存优化设计
 
-状态：第一阶段已在 macOS arm64 本地实现并通过；四平台发布证据与 `tiled` 第二阶段待完成
+状态：第一阶段已实现并通过四平台 release CI；`tiled` 第二阶段待完成
 
 适用范围：C++ Core；Node-API 只映射 Core 策略，不重新实现 OCR 逻辑
 

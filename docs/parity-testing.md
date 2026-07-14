@@ -1,6 +1,6 @@
 # light-ocr 对齐、语料与质量验证
 
-状态：`upstream_exact` 与 `bounded_default` 均已实现并在 macOS arm64 通过；更新后的 Tier 1 CI 证据待运行
+状态：`upstream_exact` 与 `bounded_default` 均已实现；release commit 的 Tier 1 CI 与 oracle 证据已通过
 
 范围：Python oracle、raw-pixel 语料、全阶段 checkpoint、容差、例外和质量基线  
 需求：[requirements.md](requirements.md)  

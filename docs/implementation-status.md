@@ -1,7 +1,7 @@
 # C++ Core 与 Node-API 实施状态
 
 更新时间：2026-07-14  
-结论：C++ Core 第一阶段高分辨率优化已实现：默认 bounded/960、短边 64、32 向上对齐、batch 1 流式 recognition、ORT output owning view、schema 1.1 bundle、双 profile parity 与独立进程内存门槛均在 macOS arm64 本地通过。Node-API 字段映射及 Node.js 22 本地真实模型测试也已通过。项目仍不能宣称发布验收完成，直到更新后的 Core 四平台 CI、Node 22/24 四平台预编译矩阵、npm 打包和 registry 证据完成；`tiled` 属于后续准确模式，不阻塞 bounded 第一阶段代码完成。
+结论：C++ Core 第一阶段高分辨率优化与 Node-API v1 已完成，`@arcships/light-ocr@0.1.0` 已公开发布。默认 bounded/960、batch 1 流式 recognition、schema 1.1 bundle、双 profile parity、四平台 Core CI、Node.js 22/24 八组 package matrix、registry 安装和禁网运行门槛均已通过。`tiled` 属于后续准确模式，不阻塞 `0.1.0`。
 
 状态含义：
 
@@ -13,19 +13,19 @@
 
 | `requirements.md` §19 条目 | 状态 | 当前证据或缺口 |
 | --- | --- | --- |
-| 四个 Tier 1 原生构建/测试 | Previous baseline Done / current Pending | [GitHub Actions run 29302144336](https://github.com/arcships/light-ocr/actions/runs/29302144336) 是 D013 前基线；当前 bounded/streaming 代码仍须重跑六个 jobs。 |
+| 四个 Tier 1 原生构建/测试 | Done | Release commit 的 [Core run 29312484043](https://github.com/arcships/light-ocr/actions/runs/29312484043) 六个 jobs 全部成功。 |
 | 生产 Core 无 Python、无子进程 | Done | `light_ocr_core` 仅 C++；Python 只在 oracle/generator/report tools；Core 无 process/shell API。 |
 | raw-pixel 公共 API、ownership/lifecycle 文档 | Done | `include/light_ocr/*.hpp` 与 [native-api.md](native-api.md)。 |
 | detection/geometry/crop/recognition/decode 分层与测试 | Done | 独立源码模块、unit tests、stage probe 和真实模型 integration tests。 |
-| PP-OCRv6 bundle 固定、哈希、许可、离线可用 | 部分 Done | `ppocrv6-small-onnx-20260714.1`、schema 1.1、原始归档、成员、dictionary、manifest 和 USTAR 已锁定；archive 为 31,334,400 bytes、SHA-256 `74e246bf…2de17`。npm tarball/integrity 与 registry 证据尚未生成。 |
-| stage 与 final parity | Done（本机） | `upstream_exact` 与 `bounded_default` 均为 14/14；候选级 trace 完整；PX-0001/PX-0002 分别覆盖两 profile 中同根因的已拒绝候选 score。当前四平台证据待重跑。 |
+| PP-OCRv6 bundle 固定、哈希、许可、离线可用 | Done | `ppocrv6-small-onnx-20260714.1`、schema 1.1、原始归档、成员、dictionary、manifest 和 USTAR 已锁定；npm model tarball 为 26,091,093 bytes，registry integrity 已记录。 |
+| stage 与 final parity | Done | `upstream_exact` 与 `bounded_default` 均为 14/14；候选级 trace 完整；release commit 的 oracle 与四平台 jobs 全绿。 |
 | 首 bundle ground-truth quality report | Done（本机） | bounded 默认在 10 个锁定 fixtures 上 10/10 exact、CER `0`；IoU≥0.5 下 detection precision/recall/Hmean 均为 `1.0`。旧 exact 基线仍独立保留。 |
 | 相对性能门槛 | Done（参考本机） | bounded 默认：median `0.9824867× ≤ 1.10×`；p95 `1.0139793× ≤ 1.15×`；inference median `0.9961966× ≤ 1.05×`。受控 CI worker 报告仍应保留。 |
-| Sanitizer、fuzz、leak、lifecycle、malformed input | Done（当前代码） | 本机 ASan+UBSan、TSan、standalone fuzz、lifecycle 和 malformed model/tensor 已通过；最新 CI safety job 的 sanitizers、TSan 和 libFuzzer smoke 通过。D013 新路径必须进入相同 gates。 |
-| 无 network/shell/cwd/locale 运行依赖 | Done（当前代码） | 本地 sterile cwd+minimal env 两次结果一致；最新 Linux job 的 network namespace disabled 测试通过。 |
-| manifest、hash、licenses、SBOM、parity、benchmark | Done（当前 CI artifacts） | 最新 Tier 1 workflow 已生成并上传平台 metadata；D013 和 npm package 完成后仍需从最终 release commit 重新生成发布制品及 hashes。 |
-| N-API/npm 非本 Core milestone | 源码与发布自动化 Done / package 发布 Pending | `bindings/node` 已有 raw Node-API v8 addon、CJS/ESM facade、`.d.ts`、安全 bundle loader、默认 model package 解析、四平台 native package 选择、专用 FIFO worker、双重背压、AbortSignal 和生命周期管理；`tools/npm_release.py` 与手动 `npm release` workflow 已实现六包确定性 staging、inventory/hash、Node 22/24 四平台 smoke、registry 分阶段发布和禁网复验。首次 prebuild、registry 与 provenance 证据仍待 workflow 实际完成。 |
-| 高分辨率峰值内存 | Done（macOS arm64）/ Pending（其他 Tier 1） | Release 原生独立进程：2048² 空白 `318.8 MiB ≤ 384 MiB`；xfund 密集表单 116 框 `400.5 MiB ≤ 640 MiB`，同时低于 512 MiB 目标。报告锁定 detection `[1,3,960,960]` 与所有 recognition batch size 1。 |
+| Sanitizer、fuzz、leak、lifecycle、malformed input | Done | 本机 ASan+UBSan、TSan、standalone fuzz、lifecycle 和 malformed model/tensor 已通过；release Core safety job 的 sanitizers、TSan 和 libFuzzer smoke 全绿。 |
+| 无 network/shell/cwd/locale 运行依赖 | Done | sterile cwd/minimal env 与 Linux network namespace disabled 测试通过；npm release 另完成已安装 package 的禁网运行。 |
+| manifest、hash、licenses、SBOM、parity、benchmark | Done | Release commit 已重新生成并保存四平台 metadata、六个 npm tarballs 的 hashes/integrity、parity、quality 与 benchmark 证据。 |
+| N-API/npm 非本 Core milestone | Done / `0.1.0` published | raw Node-API v8、CJS/ESM、`.d.ts`、内置模型解析、四平台 prebuild、双重背压、AbortSignal 与生命周期均已完成；[npm release run 29312486301](https://github.com/arcships/light-ocr/actions/runs/29312486301) 的 Node 22/24 八组测试、registry 分阶段发布和禁网复验全绿。 |
+| 高分辨率峰值内存 | Done | Release 原生独立进程本机参考：2048² 空白 `318.8 MiB ≤ 384 MiB`；xfund 密集表单 116 框 `400.5 MiB ≤ 640 MiB`。四平台 release jobs 的真实模型与 RSS gates 均通过。 |
 
 ## 本机最终验证快照
 
@@ -54,12 +54,8 @@
 
 这些数值是这台机器上的验收快照，不是所有硬件的绝对性能承诺。
 
-## 发布前必须补齐
+## 首发结论与后续范围
 
-1. 在 Linux x64、Windows x64、macOS x64 重跑并保存 D013 后的 parity、quality、absolute RSS 与 lifecycle baseline；macOS arm64 已完成本地门槛。
-2. 实现 npm staging/pack 脚本，把确定性 bundle 精确打入 `@arcships/light-ocr-model-ppocrv6-small`，记录 tarball SHA-256 和 registry integrity；独立 USTAR mirror 可延期。
-3. 用完成 D013 和 npm packaging 的干净 release commit 重新生成四个平台的 build manifest、license inventory、SPDX SBOM、artifact hashes 和 safety reports。
-4. 为 Node.js 22/24 在四个 Tier 1 平台生成 prebuild，完成 compatible-host sanitizer、worker termination、leak 与性能门槛，并保存不可变测试证据。
-5. 根 `LICENSE`/`NOTICE` 已按 Apache-2.0 提交；仍需完成六个 `@arcships` packages 的 sterile tarball install、默认 `createEngine()` 和禁网运行验证后再发布。
+`0.1.0` 的四平台 Core、Node.js 22/24 prebuild、六包确定性制品、public registry、provenance、默认 `createEngine()` 与禁网运行证据已经完成，详见 [npm 0.1.0 发布记录](releases/npm-0.1.0.md)。
 
-在以上事项完成前，应称为“C++ Core 实现完成、发布验收待补”，而不是“整个 milestone 已发布完成”。
+后续工作包括 C++ 安装包与稳定 ABI、`tiled` 准确模式、更多模型、Electron/Bun、签名/公证和非 npm 分发；这些都不是 `0.1.0` 已声明能力，也不影响本次 npm 发布结论。
