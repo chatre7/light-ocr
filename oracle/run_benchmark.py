@@ -23,6 +23,11 @@ def main() -> int:
     parser.add_argument("--fixture", type=Path, required=True)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--iterations", type=int, default=30)
+    parser.add_argument(
+        "--profile",
+        choices=["runtime_default", "bounded_default", "upstream_exact"],
+        default="runtime_default",
+    )
     parser.add_argument("--report", type=Path)
     arguments = parser.parse_args()
 
@@ -35,6 +40,7 @@ def main() -> int:
         "--width", str(fixture["width"]), "--height", str(fixture["height"]),
         "--stride", str(fixture["stride"]), "--format", fixture["pixelFormat"],
         "--warmup", str(arguments.warmup), "--iterations", str(arguments.iterations),
+        "--profile", arguments.profile,
     ]
     native_process = subprocess.run(
         [str(arguments.native_benchmark), *common],
@@ -53,6 +59,7 @@ def main() -> int:
         arguments.bundle, pixels, fixture["width"], fixture["height"],
         fixture["stride"], fixture["pixelFormat"], arguments.warmup,
         arguments.iterations,
+        arguments.profile,
     )
     ratios = {
         "warmMedian": native["latencyUs"]["median"] / oracle["latencyUs"]["median"],

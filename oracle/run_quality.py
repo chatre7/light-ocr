@@ -68,6 +68,11 @@ def main() -> int:
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--fixtures", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument(
+        "--profile",
+        choices=["upstream_exact", "bounded_default"],
+        default="bounded_default",
+    )
     parser.add_argument("--ground-truth-lock", type=Path,
                         default=Path(__file__).resolve().parents[1] / "corpus" / "ground-truth.lock.json")
     arguments = parser.parse_args()
@@ -93,6 +98,7 @@ def main() -> int:
             "--pixels", str(fixture_path.parent / "pixels.bin"),
             "--width", str(fixture["width"]), "--height", str(fixture["height"]),
             "--stride", str(fixture["stride"]), "--format", fixture["pixelFormat"],
+            "--profile", arguments.profile,
         ]
         process = subprocess.run(
             [str(arguments.native_probe), *common], check=False, capture_output=True,
@@ -171,6 +177,7 @@ def main() -> int:
     report = {
         "schemaVersion": "1.0", "baselineEstablished": True,
         "modelBundleId": model_bundle_id,
+        "profile": arguments.profile,
         "qualityGate": "baseline-only-no-retrospective-threshold",
         "groundTruthScope": "ordered line text and independently maintained quadrilateral text regions for every baseline fixture",
         "groundTruthLockSha256": hashlib.sha256(arguments.ground_truth_lock.read_bytes()).hexdigest(),

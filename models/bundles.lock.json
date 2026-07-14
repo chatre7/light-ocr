@@ -2,16 +2,15 @@
   "schemaVersion": 1,
   "bundles": [
     {
-      "bundleId": "ppocrv6-small-onnx-20260713.1",
+      "bundleId": "ppocrv6-small-onnx-20260714.1",
       "paddleOcrRevision": "b03f46425e8ff4442b268ce449e3eef758146cd4",
       "detectionModelRevision": "28fe5895c24fd108c19eb3e8479f4ab385fbfc62",
       "recognitionModelRevision": "b8f84f0b80c529de40b4fbb3544b84fa7233a513",
       "bundleArchive": {
-        "filename": "ppocrv6-small-onnx-20260713.1.tar",
+        "filename": "ppocrv6-small-onnx-20260714.1.tar",
         "format": "ustar",
         "bytes": 31334400,
-        "sha256": "d320b799ed77511e3743c36d2f23bd8cbcd80d8070d5431f4fb0ec80daa800da",
-        "mirror": null
+        "sha256": "74e246bf075c141da51e58515c731298fdabee9fd5bd8feb7cf6c7f4f352de17"
       },
       "artifacts": [
         {

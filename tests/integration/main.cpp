@@ -83,6 +83,13 @@ int main() {
                 << engine.error().message << ": " << engine.error().detail << '\n';
       return 1;
     }
+    if (engine.value()->info().detection_strategy !=
+            light_ocr::DetectionStrategy::bounded ||
+        engine.value()->info().detection_max_side != 960 ||
+        engine.value()->info().default_recognition_batch_size != 1) {
+      std::cerr << "product bundle did not select bounded/960 and recognition batch 1\n";
+      return 1;
+    }
     const std::uint8_t tiny_pixel = 255;
     const light_ocr::ImageView tiny_image{&tiny_pixel, 1, 1, 1, 1,
                                           light_ocr::PixelFormat::gray8};
@@ -271,6 +278,22 @@ int main() {
       std::cerr << "invalid engine options did not return invalid_argument\n";
       return 1;
     }
+
+    auto exact_bundle = light_ocr::ModelBundle::create(bundle_files);
+    light_ocr::EngineOptions exact_options;
+    exact_options.detection.strategy = light_ocr::DetectionStrategy::upstream_exact;
+    exact_options.recognition_batch_size = 8;
+    auto exact_engine = light_ocr::Engine::create(
+        std::move(exact_bundle).value(), exact_options);
+    if (!exact_engine ||
+        exact_engine.value()->info().detection_strategy !=
+            light_ocr::DetectionStrategy::upstream_exact ||
+        exact_engine.value()->info().detection_max_side != 4000 ||
+        exact_engine.value()->info().default_recognition_batch_size != 8) {
+      std::cerr << "explicit upstream-exact profile did not preserve source limits\n";
+      return 1;
+    }
+    exact_engine.value()->close();
 
     std::cout << "PASS real PP-OCRv6 golden result, limits, concurrency, and lifecycle\n";
     return 0;

@@ -68,24 +68,42 @@ def load_raw(path: Path, width: int, height: int, stride: int, pixel_format: str
     return load_raw_bytes(path.read_bytes(), width, height, stride, pixel_format)
 
 
-def detection_input(image: np.ndarray, config: dict[str, Any]) -> np.ndarray:
+def detection_input(
+    image: np.ndarray,
+    config: dict[str, Any],
+    resize: dict[str, Any],
+    strategy: str,
+    max_side: int,
+) -> np.ndarray:
     source = image
     height, width = image.shape[:2]
     if height + width < 64:
         source = np.zeros((max(32, height), max(32, width), 3), dtype=np.uint8)
         source[:height, :width] = image
     height, width = source.shape[:2]
-    resize = config["resize"]
-    ratio = resize["limitSideLen"] / min(height, width) if min(height, width) < resize["limitSideLen"] else 1.0
+    if strategy == "bounded":
+        ratio = resize["limitSideLen"] / min(height, width) if min(height, width) < resize["limitSideLen"] else 1.0
+        if max(height, width) * ratio > max_side:
+            ratio = max_side / max(height, width)
+    elif strategy == "upstream_exact":
+        ratio = resize["limitSideLen"] / min(height, width) if min(height, width) < resize["limitSideLen"] else 1.0
+    else:
+        raise ValueError(f"unsupported detection strategy: {strategy}")
     resized_height = int(height * ratio)
     resized_width = int(width * ratio)
-    if max(resized_height, resized_width) > resize["maxSideLimit"]:
-        ratio = resize["maxSideLimit"] / max(resized_height, resized_width)
+    if strategy == "upstream_exact" and max(resized_height, resized_width) > max_side:
+        ratio = max_side / max(resized_height, resized_width)
         resized_height = int(resized_height * ratio)
         resized_width = int(resized_width * ratio)
     multiple = resize["dimensionMultiple"]
-    resized_height = max(round(resized_height / multiple) * multiple, resize["minimumDimension"])
-    resized_width = max(round(resized_width / multiple) * multiple, resize["minimumDimension"])
+    if strategy == "bounded":
+        resized_height = math.ceil(resized_height / multiple) * multiple
+        resized_width = math.ceil(resized_width / multiple) * multiple
+    else:
+        resized_height = round(resized_height / multiple) * multiple
+        resized_width = round(resized_width / multiple) * multiple
+    resized_height = max(resized_height, resize["minimumDimension"])
+    resized_width = max(resized_width, resize["minimumDimension"])
     resized = cv2.resize(source, (resized_width, resized_height), interpolation=cv2.INTER_LINEAR)
     normalize = config["normalize"]
     tensor = resized.astype(np.float32) * np.float32(normalize["scale"])
@@ -216,10 +234,11 @@ def crop_text(image: np.ndarray, box: np.ndarray, geometry: dict[str, Any]) -> n
     return np.ascontiguousarray(crop)
 
 
-def recognition_batches(crops: list[np.ndarray], config: dict[str, Any]) -> list[tuple[list[int], np.ndarray]]:
+def recognition_batches(
+    crops: list[np.ndarray], config: dict[str, Any], batch_size: int
+) -> list[tuple[list[int], np.ndarray]]:
     input_config = config["input"]
     normalize = config["normalize"]
-    batch_size = config["batch"]["defaultSize"]
     height = input_config["shape"][1]
     base_width = input_config["shape"][2]
     base_ratio = base_width / height
@@ -275,13 +294,44 @@ def session(path: Path) -> ort.InferenceSession:
     return ort.InferenceSession(path, sess_options=options, providers=["CPUExecutionProvider"])
 
 
+def effective_profile(
+    config: dict[str, Any], profile: str
+) -> tuple[dict[str, Any], str, int, int]:
+    source_resize = config.get("sourceDetectionResize") or config["detection"]["resize"]
+    maximum_batch = int(config["recognition"]["batch"]["maximumSize"])
+    if profile == "upstream_exact":
+        return source_resize, "upstream_exact", int(source_resize["maxSideLimit"]), maximum_batch
+    if profile not in {"bounded_default", "runtime_default"}:
+        raise ValueError(f"unsupported oracle profile: {profile}")
+    if config["schemaVersion"] == "1.0":
+        return (
+            source_resize,
+            "upstream_exact",
+            int(source_resize["maxSideLimit"]),
+            int(config["recognition"]["batch"]["defaultSize"]),
+        )
+    runtime = config["runtimeDefaults"]
+    detection = runtime["detection"]
+    return (
+        source_resize,
+        str(detection["strategy"]),
+        int(detection["maxSide"]),
+        int(runtime["recognitionBatchSize"]),
+    )
+
+
 def run(bundle: Path, pixels: Path, width: int, height: int, stride: int, pixel_format: str,
-        include_crop_pixels: bool = False) -> dict[str, Any]:
+        include_crop_pixels: bool = False, profile: str = "runtime_default") -> dict[str, Any]:
     manifest = json.loads((bundle / "manifest.json").read_text("utf-8"))
     config = json.loads((bundle / manifest["normalizedConfigPath"]).read_text("utf-8"))
     characters = json.loads((bundle / config["recognition"]["decode"]["dictionaryPath"]).read_text("utf-8"))["characters"]
     image = load_raw(pixels, width, height, stride, pixel_format)
-    det_input = detection_input(image, config["detection"])
+    resize, detection_strategy, detection_max_side, recognition_batch_size = effective_profile(
+        config, profile
+    )
+    det_input = detection_input(
+        image, config["detection"], resize, detection_strategy, detection_max_side
+    )
     det_session = session(bundle / manifest["models"]["detection"]["modelPath"])
     rec_session = session(bundle / manifest["models"]["recognition"]["modelPath"])
     det_output = np.asarray(det_session.run(None, {det_session.get_inputs()[0].name: det_input})[0], dtype=np.float32)
@@ -331,7 +381,9 @@ def run(bundle: Path, pixels: Path, width: int, height: int, stride: int, pixel_
         "decoded": [{} for _ in boxes],
         "lines": [],
     }
-    for batch_index, (indices, rec_input) in enumerate(recognition_batches(crops, config["recognition"])):
+    for batch_index, (indices, rec_input) in enumerate(
+        recognition_batches(crops, config["recognition"], recognition_batch_size)
+    ):
         rec_output = np.asarray(rec_session.run(None, {rec_session.get_inputs()[0].name: rec_input})[0], dtype=np.float32)
         input_record = tensor_record(rec_input)
         output_record = tensor_record(rec_output)
@@ -353,8 +405,13 @@ def main() -> int:
     parser.add_argument("--height", type=int, required=True)
     parser.add_argument("--stride", type=int, required=True)
     parser.add_argument("--format", choices=["gray8", "rgb8", "bgr8", "rgba8"], required=True)
+    parser.add_argument(
+        "--profile",
+        choices=["runtime_default", "bounded_default", "upstream_exact"],
+        default="runtime_default",
+    )
     arguments = parser.parse_args()
-    print(json.dumps(run(arguments.bundle, arguments.pixels, arguments.width, arguments.height, arguments.stride, arguments.format), ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+    print(json.dumps(run(arguments.bundle, arguments.pixels, arguments.width, arguments.height, arguments.stride, arguments.format, profile=arguments.profile), ensure_ascii=False, sort_keys=True, separators=(",", ":")))
     return 0
 
 

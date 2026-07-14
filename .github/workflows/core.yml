@@ -54,7 +54,7 @@ jobs:
         run: >-
           python tools/run_offline_check.py
           --validate build-ci/bin/light_ocr_validate${{ matrix.executable_suffix }}
-          --bundle models/generated/ppocrv6-small-onnx-20260713.1
+          --bundle models/generated/ppocrv6-small-onnx-20260714.1
           --fixture corpus/fixtures/generated-hello-123/fixture.json
       - name: Runtime check with the network namespace disabled
         if: matrix.id == 'linux-x64'
@@ -63,14 +63,14 @@ jobs:
           sudo unshare --net --
           python3 tools/run_offline_check.py
           --validate build-ci/bin/light_ocr_validate${{ matrix.executable_suffix }}
-          --bundle models/generated/ppocrv6-small-onnx-20260713.1
+          --bundle models/generated/ppocrv6-small-onnx-20260714.1
           --fixture corpus/fixtures/generated-hello-123/fixture.json
           --require-network-disabled
       - name: Repeated lifecycle RSS gate
         shell: bash
         run: >-
           ./build-ci/bin/light_ocr_leak_check${{ matrix.executable_suffix }}
-          --bundle models/generated/ppocrv6-small-onnx-20260713.1
+          --bundle models/generated/ppocrv6-small-onnx-20260714.1
           --pixels corpus/fixtures/generated-hello-123/pixels.bin
           --width 800 --height 180 --stride 2400 --format bgr8
           --warmup 5 --iterations 10
@@ -116,7 +116,7 @@ jobs:
           ./build-fuzz/bin/light_ocr_fuzz_image -runs=100000
           ./build-fuzz/bin/light_ocr_fuzz_bundle -runs=100000
           ./build-fuzz/bin/light_ocr_fuzz_geometry -runs=100000
-          LIGHT_OCR_MODEL_BUNDLE="$PWD/models/generated/ppocrv6-small-onnx-20260713.1" ./build-fuzz/bin/light_ocr_fuzz_lifecycle -runs=10 -max_len=64
+          LIGHT_OCR_MODEL_BUNDLE="$PWD/models/generated/ppocrv6-small-onnx-20260714.1" ./build-fuzz/bin/light_ocr_fuzz_lifecycle -runs=10 -max_len=64
 
   oracle:
     runs-on: ubuntu-24.04
@@ -141,7 +141,7 @@ jobs:
         run: >-
           python oracle/run_benchmark.py
           --native-benchmark build-oracle/bin/light_ocr_benchmark
-          --bundle models/generated/ppocrv6-small-onnx-20260713.1
+          --bundle models/generated/ppocrv6-small-onnx-20260714.1
           --fixture corpus/fixtures/generated-hello-123/fixture.json
           --warmup 5 --iterations 30
           --report build-oracle/reports/benchmark/linux-x64.json

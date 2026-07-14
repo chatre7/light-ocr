@@ -35,6 +35,12 @@ struct BundleFailure : std::runtime_error {
   std::string detail;
 };
 
+struct RuntimeDefaults {
+  DetectionStrategy detection_strategy = DetectionStrategy::upstream_exact;
+  std::uint32_t detection_max_side = 4'000;
+  std::uint32_t recognition_batch_size = 8;
+};
+
 [[noreturn]] void invalid(std::string message, std::string detail = {}) {
   throw BundleFailure(ErrorCode::invalid_model_bundle, std::move(message), std::move(detail));
 }
@@ -257,19 +263,25 @@ void validate_checksum_inventory(const std::unordered_map<std::string, SharedByt
   }
 }
 
-internal::DetectionConfig parse_detection(const Json& root) {
+internal::DetectionConfig parse_detection(const Json& root,
+                                          const std::string& schema_version) {
   const auto& detection = root.at("detection");
   const auto& input = detection.at("input");
   require_string(input, "colorOrder", "BGR", "detection.input");
   require_string(input, "tensorLayout", "NCHW", "detection.input");
   require_string(input, "tensorType", "float32", "detection.input");
 
-  const auto& resize = detection.at("resize");
-  require_string(resize, "limitType", "min", "detection.resize");
-  require_string(resize, "scaledDimensionRounding", "truncate_toward_zero", "detection.resize");
-  require_string(resize, "multipleRounding", "half_to_even", "detection.resize");
-  require_string(resize, "maxSideLimitOrder", "before_multiple_rounding", "detection.resize");
-  require_string(resize, "interpolation", "linear", "detection.resize");
+  const auto& resize = schema_version == "1.1"
+                           ? root.at("sourceDetectionResize")
+                           : detection.at("resize");
+  const std::string resize_context = schema_version == "1.1"
+                                         ? "sourceDetectionResize"
+                                         : "detection.resize";
+  require_string(resize, "limitType", "min", resize_context);
+  require_string(resize, "scaledDimensionRounding", "truncate_toward_zero", resize_context);
+  require_string(resize, "multipleRounding", "half_to_even", resize_context);
+  require_string(resize, "maxSideLimitOrder", "before_multiple_rounding", resize_context);
+  require_string(resize, "interpolation", "linear", resize_context);
 
   const auto& normalize = detection.at("normalize");
   const auto& postprocess = detection.at("postprocess");
@@ -278,11 +290,11 @@ internal::DetectionConfig parse_detection(const Json& root) {
   require_string(postprocess, "boxType", "quad", "detection.postprocess");
 
   internal::DetectionConfig config;
-  config.limit_side_len = required_u32(resize, "limitSideLen", "detection.resize");
+  config.limit_side_len = required_u32(resize, "limitSideLen", resize_context);
   config.limit_type = "min";
-  config.max_side_limit = required_u32(resize, "maxSideLimit", "detection.resize");
-  config.dimension_multiple = required_u32(resize, "dimensionMultiple", "detection.resize");
-  config.minimum_dimension = required_u32(resize, "minimumDimension", "detection.resize");
+  config.max_side_limit = required_u32(resize, "maxSideLimit", resize_context);
+  config.dimension_multiple = required_u32(resize, "dimensionMultiple", resize_context);
+  config.minimum_dimension = required_u32(resize, "minimumDimension", resize_context);
   config.scale = required_finite(normalize, "scale", "detection.normalize");
   config.mean = required_float3(normalize, "mean", "detection.normalize");
   config.std = required_float3(normalize, "std", "detection.normalize");
@@ -305,6 +317,49 @@ internal::DetectionConfig parse_detection(const Json& root) {
   return config;
 }
 
+RuntimeDefaults parse_runtime_defaults(
+    const Json& root, const std::string& schema_version,
+    const internal::DetectionConfig& detection) {
+  if (schema_version == "1.0") {
+    const auto& batch = root.at("recognition").at("batch");
+    return RuntimeDefaults{
+        DetectionStrategy::upstream_exact, detection.max_side_limit,
+        required_u32(batch, "defaultSize", "recognition.batch")};
+  }
+
+  const auto& defaults = root.at("runtimeDefaults");
+  const auto& default_detection = defaults.at("detection");
+  const auto strategy =
+      required<std::string>(default_detection, "strategy", "runtimeDefaults.detection");
+  RuntimeDefaults result;
+  if (strategy == "bounded") {
+    result.detection_strategy = DetectionStrategy::bounded;
+    require_string(default_detection, "dimensionMultipleRounding", "ceil",
+                   "runtimeDefaults.detection");
+    require(required_u32(default_detection, "minimumShortSide",
+                         "runtimeDefaults.detection") ==
+                detection.limit_side_len,
+            "Runtime minimum short side must match source detection provenance");
+  } else if (strategy == "upstream_exact") {
+    result.detection_strategy = DetectionStrategy::upstream_exact;
+  } else {
+    invalid("Unsupported runtime detection strategy",
+            "runtimeDefaults.detection.strategy=" + strategy);
+  }
+  result.detection_max_side = required_u32(
+      default_detection, "maxSide", "runtimeDefaults.detection");
+  result.recognition_batch_size = required_u32(
+      defaults, "recognitionBatchSize", "runtimeDefaults");
+  require(result.detection_max_side <= detection.max_side_limit &&
+              result.detection_max_side >= detection.minimum_dimension &&
+              (result.detection_strategy != DetectionStrategy::bounded ||
+               result.detection_max_side % detection.dimension_multiple == 0) &&
+              (result.detection_strategy != DetectionStrategy::upstream_exact ||
+               result.detection_max_side == detection.max_side_limit),
+          "Runtime detection default is outside source resize limits");
+  return result;
+}
+
 internal::GeometryConfig parse_geometry(const Json& root) {
   const auto& geometry = root.at("geometry");
   require_string(geometry, "perspectiveInterpolation", "cubic", "geometry");
@@ -319,7 +374,8 @@ internal::GeometryConfig parse_geometry(const Json& root) {
 
 internal::RecognitionConfig parse_recognition(
     const Json& root, const std::unordered_map<std::string, SharedBytes>& files,
-    const std::string& manifest_dictionary_path) {
+    const std::string& manifest_dictionary_path,
+    const RuntimeDefaults& runtime_defaults) {
   const auto& recognition = root.at("recognition");
   const auto& input = recognition.at("input");
   require_string(input, "colorOrder", "BGR", "recognition.input");
@@ -353,7 +409,7 @@ internal::RecognitionConfig parse_recognition(
   config.mean = required_float3(normalize, "mean", "recognition.normalize");
   config.std = required_float3(normalize, "std", "recognition.normalize");
   config.padding_value = required_finite(normalize, "paddingValue", "recognition.normalize");
-  config.default_batch_size = required_u32(batch, "defaultSize", "recognition.batch");
+  config.default_batch_size = runtime_defaults.recognition_batch_size;
   config.maximum_batch_size = required_u32(batch, "maximumSize", "recognition.batch");
   config.blank_index = required_u32(decode, "blankIndex", "recognition.decode", 0);
   config.collapse_repeats = required<bool>(decode, "collapseRepeats", "recognition.decode");
@@ -541,8 +597,10 @@ std::shared_ptr<const internal::BundleData> parse_bundle(std::vector<BundleFile>
   require(is_normalized_path(normalized_path), "Normalized configuration path is invalid",
           normalized_path);
   const auto normalized = parse_json_file(files, normalized_path, 2 * 1024 * 1024);
-  require(required<std::string>(normalized, "schemaVersion", "normalizedConfig") == "1.0",
-          "Unsupported normalized configuration schema");
+  const auto normalized_schema =
+      required<std::string>(normalized, "schemaVersion", "normalizedConfig");
+  require(normalized_schema == "1.0" || normalized_schema == "1.1",
+          "Unsupported normalized configuration schema", normalized_schema);
   require(required<std::string>(normalized, "bundleId", "normalizedConfig") == bundle_id,
           "Normalized configuration bundle ID does not match manifest");
 
@@ -552,14 +610,22 @@ std::shared_ptr<const internal::BundleData> parse_bundle(std::vector<BundleFile>
   data->detection_model_path = detection_model_path;
   data->recognition_model_path = recognition_model_path;
   data->files = std::move(files);
-  data->detection = parse_detection(normalized);
+  data->detection = parse_detection(normalized, normalized_schema);
+  const auto runtime_defaults =
+      parse_runtime_defaults(normalized, normalized_schema, data->detection);
+  data->default_detection_strategy = runtime_defaults.detection_strategy;
+  data->default_detection_max_side = runtime_defaults.detection_max_side;
   data->geometry = parse_geometry(normalized);
   data->recognition =
-      parse_recognition(normalized, data->files, recognition_dictionary_path);
+      parse_recognition(normalized, data->files, recognition_dictionary_path,
+                        runtime_defaults);
   data->limits = parse_limits(normalized);
   data->capabilities = Capabilities{true, true, false};
   require(data->detection.max_side_limit <= data->limits.max_detection_side &&
+              data->default_detection_max_side <= data->limits.max_detection_side &&
               data->detection.max_candidates <= data->limits.max_detection_candidates &&
+              data->recognition.default_batch_size <=
+                  data->limits.max_recognition_batch_size &&
               data->recognition.maximum_batch_size <= data->limits.max_recognition_batch_size &&
               data->recognition.maximum_tensor_width <= data->limits.max_recognition_width,
           "Normalized configuration exceeds its resource limits");

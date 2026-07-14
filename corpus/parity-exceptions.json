@@ -12,6 +12,18 @@
       "rootCause": "The native and Python OpenCV builds differ by about 0.00006 pixels at one rectangle corner; truncation changes one mask column.",
       "approvedBy": "core parity policy",
       "expiresWith": "bundle, OpenCV, compiler, or DB postprocess update"
+    },
+    {
+      "id": "PX-0002",
+      "fixtureId": "paddleocr-book-page",
+      "checkpoint": "detectionCandidates[66].score",
+      "platform": "all",
+      "expectedDifference": "Bounded-profile rejected DB candidate score differs when subpixel minAreaRect output crosses the official int32 fillPoly mask boundary.",
+      "tolerance": {"absoluteDifference": 0.013},
+      "requiredInvariant": "decision is exactly below_box_threshold in native and oracle",
+      "rootCause": "The native and Python OpenCV builds differ by about 0.00006 pixels at one rectangle corner; truncation changes one mask column.",
+      "approvedBy": "core parity policy",
+      "expiresWith": "bundle, profile, OpenCV, compiler, or DB postprocess update"
     }
   ]
 }

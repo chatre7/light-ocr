@@ -14,7 +14,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK_PATH = ROOT / "models" / "bundles.lock.json"
-DEFAULT_BUNDLE = ROOT / "models" / "generated" / "ppocrv6-small-onnx-20260713.1"
+DEFAULT_BUNDLE = ROOT / "models" / "generated" / "ppocrv6-small-onnx-20260714.1"
 
 
 def sha256(path: Path) -> str:

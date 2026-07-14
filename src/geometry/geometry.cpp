@@ -82,6 +82,37 @@ std::vector<Quad> sort_reading_order(std::vector<Quad> boxes,
   return boxes;
 }
 
+Result<TextRegionShape> measure_text_region(const Quad& box,
+                                            const GeometryConfig& config) {
+  if (!valid_clockwise_convex_quad(box)) {
+    return Result<TextRegionShape>::failure(
+        Error{ErrorCode::postprocess_failed,
+              "Detected quadrilateral is non-finite, degenerate, concave, or unordered", {}});
+  }
+  const auto width_value = std::max(distance(box.points[0], box.points[1]),
+                                    distance(box.points[2], box.points[3]));
+  const auto height_value = std::max(distance(box.points[0], box.points[3]),
+                                     distance(box.points[1], box.points[2]));
+  if (!std::isfinite(width_value) || !std::isfinite(height_value) ||
+      width_value > std::numeric_limits<int>::max() ||
+      height_value > std::numeric_limits<int>::max()) {
+    return Result<TextRegionShape>::failure(
+        Error{ErrorCode::resource_limit_exceeded,
+              "Detected quadrilateral produces an unsupported crop size", {}});
+  }
+  if (width_value < 1 || height_value < 1) {
+    return Result<TextRegionShape>::failure(
+        Error{ErrorCode::postprocess_failed,
+              "Detected quadrilateral produces an empty crop", {}});
+  }
+  TextRegionShape result;
+  result.width = static_cast<std::uint32_t>(width_value);
+  result.height = static_cast<std::uint32_t>(height_value);
+  result.rotate_counterclockwise_90 =
+      static_cast<double>(result.height) / result.width >= config.tall_line_ratio;
+  return Result<TextRegionShape>::success(result);
+}
+
 Result<std::vector<cv::Mat>> crop_text_regions(const cv::Mat& bgr,
                                                const std::vector<Quad>& boxes,
                                                const GeometryConfig& config,
@@ -95,30 +126,13 @@ Result<std::vector<cv::Mat>> crop_text_regions(const cv::Mat& bgr,
     crops.reserve(boxes.size());
     std::uint64_t aggregate_bytes = 0;
     for (const auto& box : boxes) {
-      if (!valid_clockwise_convex_quad(box)) {
-        return Result<std::vector<cv::Mat>>::failure(
-            Error{ErrorCode::postprocess_failed,
-                  "Detected quadrilateral is non-finite, degenerate, concave, or unordered", {}});
+      auto shape_result = measure_text_region(box, config);
+      if (!shape_result) {
+        return Result<std::vector<cv::Mat>>::failure(shape_result.error());
       }
-      const auto width_value = std::max(distance(box.points[0], box.points[1]),
-                                        distance(box.points[2], box.points[3]));
-      const auto height_value = std::max(distance(box.points[0], box.points[3]),
-                                         distance(box.points[1], box.points[2]));
-      if (!std::isfinite(width_value) || !std::isfinite(height_value) ||
-          width_value > std::numeric_limits<int>::max() ||
-          height_value > std::numeric_limits<int>::max()) {
-        return Result<std::vector<cv::Mat>>::failure(
-            Error{ErrorCode::resource_limit_exceeded,
-                  "Detected quadrilateral produces an unsupported crop size", {}});
-      }
-      if (width_value < 1 || height_value < 1) {
-        return Result<std::vector<cv::Mat>>::failure(
-            Error{ErrorCode::postprocess_failed, "Detected quadrilateral produces an empty crop", {}});
-      }
-      const auto width = static_cast<std::uint32_t>(width_value);
-      const auto height = static_cast<std::uint32_t>(height_value);
+      const auto shape = std::move(shape_result).value();
       std::uint64_t crop_bytes = 0;
-      if (!checked_mul<std::uint64_t>(width, height, &crop_bytes) ||
+      if (!checked_mul<std::uint64_t>(shape.width, shape.height, &crop_bytes) ||
           !checked_mul<std::uint64_t>(crop_bytes, 3, &crop_bytes) ||
           !checked_add<std::uint64_t>(aggregate_bytes, crop_bytes, &aggregate_bytes) ||
           aggregate_bytes > limits.max_temporary_bytes) {
@@ -130,15 +144,15 @@ Result<std::vector<cv::Mat>> crop_text_regions(const cv::Mat& bgr,
         source[i] = cv::Point2f(box.points[i].x, box.points[i].y);
       }
       const std::array<cv::Point2f, 4> destination = {
-          cv::Point2f(0, 0), cv::Point2f(static_cast<float>(width), 0),
-          cv::Point2f(static_cast<float>(width), static_cast<float>(height)),
-          cv::Point2f(0, static_cast<float>(height))};
+          cv::Point2f(0, 0), cv::Point2f(static_cast<float>(shape.width), 0),
+          cv::Point2f(static_cast<float>(shape.width), static_cast<float>(shape.height)),
+          cv::Point2f(0, static_cast<float>(shape.height))};
       const auto transform = cv::getPerspectiveTransform(source, destination);
       cv::Mat crop;
-      cv::warpPerspective(bgr, crop, transform, cv::Size(static_cast<int>(width),
-                                                         static_cast<int>(height)),
+      cv::warpPerspective(bgr, crop, transform, cv::Size(static_cast<int>(shape.width),
+                                                         static_cast<int>(shape.height)),
                           cv::INTER_CUBIC, cv::BORDER_REPLICATE);
-      if (static_cast<double>(crop.rows) / crop.cols >= config.tall_line_ratio) {
+      if (shape.rotate_counterclockwise_90) {
         cv::Mat rotated;
         cv::rotate(crop, rotated, cv::ROTATE_90_COUNTERCLOCKWISE);
         crop = std::move(rotated);

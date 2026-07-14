@@ -102,6 +102,16 @@ Decision: Results preserve ordered quadrilateral boxes, confidence, UTF-8 text, 
 Reason: Geometry and stage evidence are required for adapter parity, debugging, and performance attribution.  
 Consequence: Later adapters map the contract without flattening boxes or redefining confidence.
 
+### D013 — Bound default detection and stream recognition memory
+
+Status: Accepted; first phase implemented locally, Tier 1 evidence pending
+
+Decision: Follow [memory-optimization.md](memory-optimization.md). The product default uses `bounded` detection with longest side `960`, keeps `4,000` only as the bundle ceiling and explicit `upstream_exact` behavior, changes the effective recognition default to batch `1`, and constructs/crops/infers/decodes/releases one recognition batch at a time. High-resolution accuracy uses an overlap-tiled strategy after its quality gates pass.
+
+Reason: A single 2048×2048 image currently reaches about 0.9 GiB RSS before dense recognition and about 2.1 GiB for a 127-line form. The model weights are only about 30 MiB; full-resolution activations, ORT workspace, output copies, and all-batch materialization dominate memory.
+
+Consequence: Normalized config schema `1.1` distinguishes upstream resize provenance, product runtime defaults, and hard ceilings. Exact and bounded goldens are separate profiles; macOS arm64 absolute RSS gates and API changes are complete locally, while the other Tier 1 baselines and tiled second phase remain before release.
+
 ### D101 — Use an asynchronous, bounded Node-API v8 adapter
 
 Status: Accepted; source implementation complete, release matrix pending<br>
@@ -141,12 +151,12 @@ These are not unresolved semantic choices. Their current completion state is tra
 
 | Record | Repository authority | Current state |
 | --- | --- | --- |
-| Native dependency lock | `models/deps.lock.json` | Complete locally; Tier 1 use awaits CI evidence |
-| Toolchain/CI identity | `.github/workflows/core.yml` plus generated build manifest | Configured; remote run evidence pending |
+| Native dependency lock | `models/deps.lock.json` | Complete and exercised by the latest Tier 1 CI run |
+| Toolchain/CI identity | `.github/workflows/core.yml` plus generated build manifest | Latest six-job Core workflow passed on Linux, Windows, and both macOS architectures |
 | Bundle lock and archive | `models/bundles.lock.json`, generated bundle and USTAR checksum | Hash complete; npm model staging and registry evidence pending |
 | Oracle environment lock | `oracle/oracle.lock.json`, `oracle/requirements.lock` | Complete and locally exercised |
 | Corpus manifest | `corpus/sources.lock.json`, `contracts.json`, fixture manifests | Complete for current 14-fixture parity corpus; clean regeneration and contract evidence are verified |
-| Benchmark declaration/report | `oracle/run_benchmark.py`, generated benchmark report | Local reference run passed; controlled CI report pending |
+| Benchmark declaration/report | `oracle/run_benchmark.py`, generated benchmark report | Local reference run and controlled Linux oracle CI passed; final release report must be regenerated after D013 |
 | Ground-truth report | `corpus/ground-truth.lock.json`, generated quality report | Complete local first-bundle text/detection baseline with pixel-bound independent boxes |
 
 The C++ implementation is complete, but the milestone cannot be declared release-complete until the Pending items above have immutable evidence.

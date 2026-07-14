@@ -76,6 +76,13 @@ export interface ResourceLimits {
   readonly maxTemporaryBytes: number;
 }
 
+export type DetectionStrategy = "bounded" | "upstreamExact";
+
+export interface DetectionOptions {
+  readonly strategy?: DetectionStrategy;
+  readonly maxSide?: number;
+}
+
 export interface CreateEngineOptions {
   /** Built-in package model. Defaults to ppocrv6-small. */
   readonly model?: BuiltInModel;
@@ -85,6 +92,7 @@ export interface CreateEngineOptions {
   readonly interOpThreads?: number;
   readonly recognitionScoreThreshold?: number;
   readonly recognitionBatchSize?: number;
+  readonly detection?: DetectionOptions;
   /** Complete replacement; every value may only reduce the bundle ceiling. */
   readonly reducedLimits?: ResourceLimits;
   /** Running plus queued recognize calls. Default 4; range 1..64. */
@@ -100,6 +108,8 @@ export interface RecognizeOptions {
   readonly signal?: AbortSignal;
   /** The initial bundle reports this capability as false. */
   readonly useTextlineOrientation?: boolean;
+  /** May only lower the side of a bounded engine. */
+  readonly detectionMaxSide?: number;
 }
 
 export interface Point {
@@ -130,6 +140,13 @@ export interface Diagnostics {
   readonly warnings: readonly DiagnosticWarning[];
   readonly detectedCandidates: number;
   readonly acceptedBoxes: number;
+  readonly detectionInputWidth: number;
+  readonly detectionInputHeight: number;
+  readonly recognitionBatchShapes: readonly {
+    readonly batchSize: number;
+    readonly height: number;
+    readonly width: number;
+  }[];
 }
 
 export interface TimingUs {
@@ -170,6 +187,8 @@ export interface EngineInfo {
   readonly limits: ResourceLimits & { readonly maxConcurrentCalls: 1 };
   readonly intraOpThreads: number;
   readonly interOpThreads: number;
+  readonly detectionStrategy: DetectionStrategy;
+  readonly detectionMaxSide: number;
   readonly defaultRecognitionScoreThreshold: number;
   readonly defaultRecognitionBatchSize: number;
   readonly adapter: {

@@ -107,10 +107,20 @@ class EngineImpl final : public Engine {
           info_.default_recognition_score_threshold);
       const auto batch_size = options.recognition_batch_size.value_or(
           info_.default_recognition_batch_size);
+      const auto detection_max_side = options.detection_max_side.value_or(
+          info_.detection_max_side);
       if (!valid_score(score_threshold) || batch_size == 0 ||
-          batch_size > info_.limits.max_recognition_batch_size) {
+          batch_size > info_.limits.max_recognition_batch_size ||
+          detection_max_side == 0 ||
+          detection_max_side > info_.detection_max_side ||
+          (info_.detection_strategy != DetectionStrategy::bounded &&
+           info_.detection_strategy != DetectionStrategy::upstream_exact) ||
+          (info_.detection_strategy == DetectionStrategy::bounded &&
+           detection_max_side % bundle_->detection.dimension_multiple != 0) ||
+          (info_.detection_strategy == DetectionStrategy::upstream_exact &&
+           options.detection_max_side.has_value())) {
         return failure<OcrResult>(ErrorCode::invalid_argument,
-                                  "Recognition options are outside effective limits");
+                                  "Request options are outside effective limits");
       }
 
       Timing timing;
@@ -129,18 +139,23 @@ class EngineImpl final : public Engine {
       }
 
       internal::DetectionBoxes detected;
+      std::uint32_t detection_input_width = 0;
+      std::uint32_t detection_input_height = 0;
       {
         stage_begin = Clock::now();
         auto detection_limits = info_.limits;
         detection_limits.max_temporary_bytes -= image_bytes;
         auto detection_input_result = internal::make_detection_input(
-            validated.bgr, bundle_->detection, detection_limits);
+            validated.bgr, bundle_->detection, info_.detection_strategy,
+            detection_max_side, detection_limits);
         stage_end = Clock::now();
         timing.detection_preprocess_us = elapsed_us(stage_begin, stage_end);
         if (!detection_input_result) {
           return Result<OcrResult>::failure(detection_input_result.error());
         }
         auto detection_input = std::move(detection_input_result).value();
+        detection_input_height = static_cast<std::uint32_t>(detection_input.shape[2]);
+        detection_input_width = static_cast<std::uint32_t>(detection_input.shape[3]);
 
         stage_begin = Clock::now();
         auto detection_output_result =
@@ -154,8 +169,8 @@ class EngineImpl final : public Engine {
 
         stage_begin = Clock::now();
         auto detected_result = internal::db_postprocess(
-            detection_output.values.data(), detection_output.values.size(),
-            detection_output.shape, image.width, image.height, bundle_->detection,
+            detection_output.data(), detection_output.size(),
+            detection_output.shape(), image.width, image.height, bundle_->detection,
             info_.limits);
         stage_end = Clock::now();
         timing.detection_postprocess_us = elapsed_us(stage_begin, stage_end);
@@ -166,68 +181,103 @@ class EngineImpl final : public Engine {
       stage_begin = Clock::now();
       auto sorted_boxes =
           internal::sort_reading_order(std::move(detected.boxes), bundle_->geometry);
-      auto crop_limits = info_.limits;
-      crop_limits.max_temporary_bytes -= image_bytes;
-      auto crops_result = internal::crop_text_regions(
-          validated.bgr, sorted_boxes, bundle_->geometry, crop_limits);
+      auto plans_result = internal::plan_recognition_batches(
+          sorted_boxes, bundle_->geometry, bundle_->recognition, batch_size,
+          info_.limits);
       stage_end = Clock::now();
       timing.crop_and_sort_us = elapsed_us(stage_begin, stage_end);
-      if (!crops_result) return Result<OcrResult>::failure(crops_result.error());
-      auto crops = std::move(crops_result).value();
-      std::uint64_t crop_bytes = 0;
-      for (const auto& crop : crops) {
-        std::uint64_t bytes = 0;
-        if (!internal::checked_mul<std::uint64_t>(crop.total(), crop.elemSize(), &bytes) ||
-            !internal::checked_add<std::uint64_t>(crop_bytes, bytes, &crop_bytes) ||
-            crop_bytes > info_.limits.max_temporary_bytes) {
-          return failure<OcrResult>(ErrorCode::resource_limit_exceeded,
-                                    "Text crops exceed the request memory budget");
+      if (!plans_result) {
+        return Result<OcrResult>::failure(plans_result.error());
+      }
+      auto plans = std::move(plans_result).value();
+
+      std::vector<internal::DecodedText> decoded(sorted_boxes.size());
+      std::vector<RecognitionBatchShape> recognition_batch_shapes;
+      if (options.include_diagnostics) {
+        recognition_batch_shapes.reserve(plans.size());
+      }
+      for (const auto& plan : plans) {
+        std::vector<Quad> batch_boxes;
+        batch_boxes.reserve(plan.samples.size());
+        for (const auto& sample : plan.samples) {
+          batch_boxes.push_back(sorted_boxes[sample.input_index]);
+        }
+
+        auto crop_limits = info_.limits;
+        crop_limits.max_temporary_bytes -= image_bytes;
+        stage_begin = Clock::now();
+        auto crops_result = internal::crop_text_regions(
+            validated.bgr, batch_boxes, bundle_->geometry, crop_limits);
+        stage_end = Clock::now();
+        timing.crop_and_sort_us += elapsed_us(stage_begin, stage_end);
+        if (!crops_result) {
+          return Result<OcrResult>::failure(crops_result.error());
+        }
+        auto crops = std::move(crops_result).value();
+        std::uint64_t crop_bytes = 0;
+        for (const auto& crop : crops) {
+          std::uint64_t bytes = 0;
+          if (!internal::checked_mul<std::uint64_t>(
+                  crop.total(), crop.elemSize(), &bytes) ||
+              !internal::checked_add<std::uint64_t>(crop_bytes, bytes,
+                                                    &crop_bytes) ||
+              crop_bytes > crop_limits.max_temporary_bytes) {
+            return failure<OcrResult>(
+                ErrorCode::resource_limit_exceeded,
+                "Recognition crops exceed the request memory budget");
+          }
+        }
+
+        auto recognition_limits = info_.limits;
+        recognition_limits.max_temporary_bytes -= image_bytes;
+        recognition_limits.max_temporary_bytes -= crop_bytes;
+        stage_begin = Clock::now();
+        auto batch_result = internal::make_recognition_batch(
+            crops, plan, bundle_->recognition, recognition_limits);
+        stage_end = Clock::now();
+        timing.recognition_preprocess_us += elapsed_us(stage_begin, stage_end);
+        if (!batch_result) {
+          return Result<OcrResult>::failure(batch_result.error());
+        }
+        auto batch = std::move(batch_result).value();
+        if (options.include_diagnostics) {
+          recognition_batch_shapes.push_back(
+              RecognitionBatchShape{static_cast<std::uint32_t>(batch.shape[0]),
+                                    static_cast<std::uint32_t>(batch.shape[2]),
+                                    static_cast<std::uint32_t>(batch.shape[3])});
+        }
+        std::vector<cv::Mat>().swap(crops);
+
+        stage_begin = Clock::now();
+        auto output_result = recognition_->run(batch.values, batch.shape);
+        stage_end = Clock::now();
+        timing.recognition_inference_us += elapsed_us(stage_begin, stage_end);
+        if (!output_result) {
+          return Result<OcrResult>::failure(output_result.error());
+        }
+        auto output = std::move(output_result).value();
+        std::vector<float>().swap(batch.values);
+
+        stage_begin = Clock::now();
+        auto batch_decoded_result = internal::decode_ctc(
+            output.data(), output.size(), output.shape(),
+            bundle_->recognition.characters, bundle_->recognition.blank_index,
+            bundle_->recognition.collapse_repeats);
+        stage_end = Clock::now();
+        timing.recognition_postprocess_us += elapsed_us(stage_begin, stage_end);
+        if (!batch_decoded_result) {
+          return Result<OcrResult>::failure(batch_decoded_result.error());
+        }
+        auto batch_decoded = std::move(batch_decoded_result).value();
+        if (batch_decoded.size() != batch.input_indices.size()) {
+          return failure<OcrResult>(ErrorCode::postprocess_failed,
+                                    "Recognition batch result count is invalid");
+        }
+        for (std::size_t index = 0; index < batch.input_indices.size(); ++index) {
+          decoded[batch.input_indices[index]] = std::move(batch_decoded[index]);
         }
       }
       validated.bgr.release();
-
-      std::vector<internal::DecodedText> decoded(sorted_boxes.size());
-      if (!crops.empty()) {
-        stage_begin = Clock::now();
-        auto recognition_limits = info_.limits;
-        recognition_limits.max_temporary_bytes -= crop_bytes;
-        auto batches_result = internal::make_recognition_batches(
-            crops, bundle_->recognition, batch_size, recognition_limits);
-        stage_end = Clock::now();
-        timing.recognition_preprocess_us = elapsed_us(stage_begin, stage_end);
-        if (!batches_result) return Result<OcrResult>::failure(batches_result.error());
-        auto batches = std::move(batches_result).value();
-        std::vector<cv::Mat>().swap(crops);
-
-        for (auto& batch : batches) {
-          stage_begin = Clock::now();
-          auto output_result = recognition_->run(batch.values, batch.shape);
-          stage_end = Clock::now();
-          timing.recognition_inference_us += elapsed_us(stage_begin, stage_end);
-          if (!output_result) return Result<OcrResult>::failure(output_result.error());
-          auto output = std::move(output_result).value();
-          std::vector<float>().swap(batch.values);
-
-          stage_begin = Clock::now();
-          auto batch_decoded_result = internal::decode_ctc(
-              output.values.data(), output.values.size(), output.shape,
-              bundle_->recognition.characters, bundle_->recognition.blank_index,
-              bundle_->recognition.collapse_repeats);
-          stage_end = Clock::now();
-          timing.recognition_postprocess_us += elapsed_us(stage_begin, stage_end);
-          if (!batch_decoded_result) {
-            return Result<OcrResult>::failure(batch_decoded_result.error());
-          }
-          auto batch_decoded = std::move(batch_decoded_result).value();
-          if (batch_decoded.size() != batch.input_indices.size()) {
-            return failure<OcrResult>(ErrorCode::postprocess_failed,
-                                      "Recognition batch result count is invalid");
-          }
-          for (std::size_t index = 0; index < batch.input_indices.size(); ++index) {
-            decoded[batch.input_indices[index]] = std::move(batch_decoded[index]);
-          }
-        }
-      }
 
       auto assembled = internal::assemble_ocr_result(
           image.width, image.height, bundle_->id, timing,
@@ -235,6 +285,12 @@ class EngineImpl final : public Engine {
           score_threshold, options.include_diagnostics);
       if (!assembled) return Result<OcrResult>::failure(assembled.error());
       auto result = std::move(assembled).value();
+      if (result.diagnostics) {
+        result.diagnostics->detection_input_width = detection_input_width;
+        result.diagnostics->detection_input_height = detection_input_height;
+        result.diagnostics->recognition_batch_shapes =
+            std::move(recognition_batch_shapes);
+      }
       result.timing.total_us = elapsed_us(total_begin, Clock::now());
       return Result<OcrResult>::success(std::move(result));
     } catch (const std::exception& exception) {
@@ -302,6 +358,31 @@ Result<std::unique_ptr<Engine>> Engine::create(ModelBundle bundle,
       return failure<std::unique_ptr<Engine>>(ErrorCode::invalid_argument,
                                               "Engine recognition defaults are outside limits");
     }
+    const auto detection_strategy = options.detection.strategy.value_or(
+        bundle.data_->default_detection_strategy);
+    const auto default_detection_max_side =
+        detection_strategy == bundle.data_->default_detection_strategy
+            ? bundle.data_->default_detection_max_side
+            : detection_strategy == DetectionStrategy::bounded
+                  ? 960u
+                  : bundle.data_->detection.max_side_limit;
+    const auto detection_max_side = options.detection.max_side.value_or(
+        default_detection_max_side);
+    if ((detection_strategy != DetectionStrategy::bounded &&
+         detection_strategy != DetectionStrategy::upstream_exact) ||
+        (detection_strategy == DetectionStrategy::bounded &&
+         (detection_max_side < bundle.data_->detection.minimum_dimension ||
+          detection_max_side % bundle.data_->detection.dimension_multiple != 0 ||
+          detection_max_side > bundle.data_->detection.max_side_limit ||
+          detection_max_side > limits.max_detection_side)) ||
+        (detection_strategy == DetectionStrategy::upstream_exact &&
+         (options.detection.max_side.has_value() ||
+          detection_max_side != bundle.data_->detection.max_side_limit ||
+          detection_max_side > limits.max_detection_side))) {
+      return failure<std::unique_ptr<Engine>>(
+          ErrorCode::invalid_argument,
+          "Engine detection defaults are outside limits");
+    }
     const auto& detection_bytes = bundle.data_->files.at(bundle.data_->detection_model_path);
     const auto& recognition_bytes = bundle.data_->files.at(bundle.data_->recognition_model_path);
     auto detection = internal::OnnxSession::create(
@@ -323,6 +404,8 @@ Result<std::unique_ptr<Engine>> Engine::create(ModelBundle bundle,
     info.limits = limits;
     info.intra_op_threads = options.intra_op_threads;
     info.inter_op_threads = options.inter_op_threads;
+    info.detection_strategy = detection_strategy;
+    info.detection_max_side = detection_max_side;
     info.default_recognition_score_threshold = score_threshold;
     info.default_recognition_batch_size = batch_size;
     return Result<std::unique_ptr<Engine>>::success(std::unique_ptr<Engine>(new EngineImpl(

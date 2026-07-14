@@ -31,6 +31,11 @@ def main() -> int:
                         help="optional canonical oracle stage record for diagnostics")
     parser.add_argument("--live-oracle", action="store_true",
                         help="diagnostic mode; compare with a fresh oracle run instead of locked golden")
+    parser.add_argument(
+        "--profile",
+        choices=["upstream_exact", "bounded_default"],
+        default="upstream_exact",
+    )
     arguments = parser.parse_args()
 
     fixture = json.loads(arguments.fixture.read_text("utf-8"))
@@ -50,6 +55,8 @@ def main() -> int:
         str(fixture["stride"]),
         "--format",
         fixture["pixelFormat"],
+        "--profile",
+        arguments.profile,
     ]
     native_process = subprocess.run(
         [str(arguments.native_probe), *common],
@@ -73,24 +80,37 @@ def main() -> int:
             fixture["stride"],
             fixture["pixelFormat"],
             include_crop_pixels=True,
+            profile=arguments.profile,
         )
         oracle_lock_sha256 = file_sha256(Path(__file__).with_name("oracle.lock.json"))
     else:
         corpus_root = arguments.fixture.parents[2]
-        golden_lock = json.loads((corpus_root / "goldens.lock.json").read_text("utf-8"))
+        golden_name = (
+            "goldens.lock.json"
+            if arguments.profile == "upstream_exact"
+            else "goldens-bounded.lock.json"
+        )
+        golden_directory = (
+            "goldens"
+            if arguments.profile == "upstream_exact"
+            else "goldens-bounded"
+        )
+        golden_lock = json.loads((corpus_root / golden_name).read_text("utf-8"))
         if golden_lock["bundleManifestSha256"] != file_sha256(arguments.bundle / "manifest.json"):
             raise RuntimeError("oracle goldens were generated for a different bundle manifest")
         if golden_lock["oracleLockSha256"] != file_sha256(Path(__file__).with_name("oracle.lock.json")):
             raise RuntimeError("oracle golden environment lock is stale")
         if golden_lock["oracleSourceSha256"] != file_sha256(Path(__file__).with_name("oracle.py")):
             raise RuntimeError("oracle golden source identity is stale")
+        if golden_lock.get("profile", "upstream_exact") != arguments.profile:
+            raise RuntimeError("oracle golden profile identity is stale")
         record = next(
             (item for item in golden_lock["fixtures"] if item["fixtureId"] == fixture["id"]),
             None,
         )
         if record is None:
             raise RuntimeError(f"fixture has no locked oracle golden: {fixture['id']}")
-        golden_path = corpus_root / "goldens" / record["path"]
+        golden_path = corpus_root / golden_directory / record["path"]
         golden_bytes = golden_path.read_bytes()
         if len(golden_bytes) != record["bytes"] or hashlib.sha256(golden_bytes).hexdigest() != record["sha256"]:
             raise RuntimeError(f"oracle golden lock mismatch: {fixture['id']}")
@@ -118,6 +138,7 @@ def main() -> int:
             "pixelSha256": fixture["pixelSha256"],
             "oracleLockSha256": oracle_lock_sha256,
             "oracleMode": "live" if arguments.live_oracle else "locked-golden",
+            "profile": arguments.profile,
             "nativeProbe": {
                 "filename": arguments.native_probe.name,
                 "sha256": file_sha256(arguments.native_probe),

@@ -12,6 +12,30 @@
 
 using namespace light_ocr;
 
+namespace {
+
+internal::RecognitionConfig recognition_config() {
+  internal::RecognitionConfig config;
+  config.channels = 3;
+  config.height = 48;
+  config.base_width = 320;
+  config.minimum_tensor_width = 320;
+  config.maximum_tensor_width = 3200;
+  config.scale = 1.0f / 255.0f;
+  config.mean = {0.5f, 0.5f, 0.5f};
+  config.std = {0.5f, 0.5f, 0.5f};
+  config.padding_value = 0;
+  config.maximum_batch_size = 8;
+  return config;
+}
+
+Quad rectangle(float width, float height) {
+  return Quad{{Point{0, 0}, Point{width, 0}, Point{width, height},
+               Point{0, height}}};
+}
+
+}  // namespace
+
 LIGHT_OCR_TEST(image_rejects_bad_stride_and_truncated_buffer) {
   const std::vector<std::uint8_t> bad_stride_bytes(256, 0);
   const ImageView bad_stride{bad_stride_bytes.data(), bad_stride_bytes.size(), 16, 16, 15,
@@ -99,7 +123,9 @@ LIGHT_OCR_TEST(detection_resize_pads_tiny_images_before_min_64_resize) {
   config.scale = 1.0f / 255.0f;
   config.mean = {0.485f, 0.456f, 0.406f};
   config.std = {0.229f, 0.224f, 0.225f};
-  auto result = internal::make_detection_input(image, config, ResourceLimits{});
+  auto result = internal::make_detection_input(
+      image, config, DetectionStrategy::upstream_exact, 4000,
+      ResourceLimits{});
   EXPECT_TRUE(result);
   EXPECT_EQ(result.value().shape[2], 64);
   EXPECT_EQ(result.value().shape[3], 64);
@@ -121,66 +147,107 @@ LIGHT_OCR_TEST(detection_preprocess_counts_image_workspace_and_tensor_memory) {
   config.std = {0.229f, 0.224f, 0.225f};
   ResourceLimits limits;
   limits.max_temporary_bytes = 64 * 64 * 3 * sizeof(float);
-  auto result = internal::make_detection_input(image, config, limits);
+  auto result = internal::make_detection_input(
+      image, config, DetectionStrategy::upstream_exact, 4000, limits);
   EXPECT_FALSE(result);
   EXPECT_EQ(result.error().code, ErrorCode::resource_limit_exceeded);
+}
+
+LIGHT_OCR_TEST(detection_bounded_limits_longest_side_and_preserves_minimum_short_side) {
+  internal::DetectionConfig config;
+  config.limit_side_len = 64;
+  config.limit_type = "min";
+  config.max_side_limit = 4000;
+  config.dimension_multiple = 32;
+  config.minimum_dimension = 32;
+  config.scale = 1.0f / 255.0f;
+  config.mean = {0.485f, 0.456f, 0.406f};
+  config.std = {0.229f, 0.224f, 0.225f};
+
+  cv::Mat large(1024, 2048, CV_8UC3, cv::Scalar(255, 255, 255));
+  auto large_result = internal::make_detection_input(
+      large, config, DetectionStrategy::bounded, 960, ResourceLimits{});
+  EXPECT_TRUE(large_result);
+  EXPECT_EQ(large_result.value().shape[2], 480);
+  EXPECT_EQ(large_result.value().shape[3], 960);
+
+  cv::Mat shallow(190, 1280, CV_8UC3, cv::Scalar(255, 255, 255));
+  auto shallow_result = internal::make_detection_input(
+      shallow, config, DetectionStrategy::bounded, 960, ResourceLimits{});
+  EXPECT_TRUE(shallow_result);
+  EXPECT_EQ(shallow_result.value().shape[2], 160);
+  EXPECT_EQ(shallow_result.value().shape[3], 960);
+
+  cv::Mat small(10, 20, CV_8UC3, cv::Scalar(255, 255, 255));
+  auto small_result = internal::make_detection_input(
+      small, config, DetectionStrategy::bounded, 960, ResourceLimits{});
+  EXPECT_TRUE(small_result);
+  EXPECT_EQ(small_result.value().shape[2], 64);
+  EXPECT_EQ(small_result.value().shape[3], 64);
 }
 
 LIGHT_OCR_TEST(recognition_batches_restore_input_indices) {
   std::vector<cv::Mat> crops;
   crops.emplace_back(48, 480, CV_8UC3, cv::Scalar(0, 0, 0));
   crops.emplace_back(48, 96, CV_8UC3, cv::Scalar(255, 255, 255));
-  internal::RecognitionConfig config;
-  config.channels = 3;
-  config.height = 48;
-  config.base_width = 320;
-  config.minimum_tensor_width = 320;
-  config.maximum_tensor_width = 3200;
-  config.scale = 1.0f / 255.0f;
-  config.mean = {0.5f, 0.5f, 0.5f};
-  config.std = {0.5f, 0.5f, 0.5f};
-  config.padding_value = 0;
-  config.maximum_batch_size = 8;
-  auto result = internal::make_recognition_batches(crops, config, 2, ResourceLimits{});
-  EXPECT_TRUE(result);
-  EXPECT_EQ(result.value().size(), 1u);
-  EXPECT_EQ(result.value()[0].input_indices[0], 1u);
-  EXPECT_EQ(result.value()[0].input_indices[1], 0u);
-  EXPECT_EQ(result.value()[0].shape[3], 480);
+  const auto config = recognition_config();
+  const std::vector<Quad> boxes{rectangle(480, 48), rectangle(96, 48)};
+  internal::GeometryConfig geometry;
+  geometry.tall_line_ratio = 1.5f;
+  auto plans = internal::plan_recognition_batches(
+      boxes, geometry, config, 2, ResourceLimits{});
+  EXPECT_TRUE(plans);
+  EXPECT_EQ(plans.value().size(), 1u);
+  EXPECT_EQ(plans.value()[0].samples[0].input_index, 1u);
+  EXPECT_EQ(plans.value()[0].samples[1].input_index, 0u);
+  std::vector<cv::Mat> batch_crops{crops[1], crops[0]};
+  auto batch = internal::make_recognition_batch(
+      batch_crops, plans.value()[0], config, ResourceLimits{});
+  EXPECT_TRUE(batch);
+  EXPECT_EQ(batch.value().input_indices[0], 1u);
+  EXPECT_EQ(batch.value().input_indices[1], 0u);
+  EXPECT_EQ(batch.value().shape[3], 480);
 }
 
 LIGHT_OCR_TEST(recognition_batches_reject_invalid_batch_and_memory_limit) {
   std::vector<cv::Mat> crops{cv::Mat(48, 320, CV_8UC3, cv::Scalar(0, 0, 0))};
-  internal::RecognitionConfig config;
-  config.channels = 3;
-  config.height = 48;
-  config.base_width = 320;
-  config.minimum_tensor_width = 320;
-  config.maximum_tensor_width = 3200;
-  config.scale = 1.0f / 255.0f;
-  config.mean = {0.5f, 0.5f, 0.5f};
-  config.std = {0.5f, 0.5f, 0.5f};
-  config.maximum_batch_size = 8;
+  const auto config = recognition_config();
+  internal::GeometryConfig geometry;
+  geometry.tall_line_ratio = 1.5f;
+  std::vector<Quad> boxes{rectangle(320, 48)};
 
-  auto zero_batch = internal::make_recognition_batches(crops, config, 0, ResourceLimits{});
+  auto zero_batch = internal::plan_recognition_batches(
+      boxes, geometry, config, 0, ResourceLimits{});
   EXPECT_FALSE(zero_batch);
   EXPECT_EQ(zero_batch.error().code, ErrorCode::invalid_argument);
 
+  auto plans = internal::plan_recognition_batches(
+      boxes, geometry, config, 1, ResourceLimits{});
+  EXPECT_TRUE(plans);
   ResourceLimits limits;
   limits.max_temporary_bytes = 1;
-  auto memory_limited = internal::make_recognition_batches(crops, config, 1, limits);
+  auto memory_limited = internal::make_recognition_batch(
+      crops, plans.value()[0], config, limits);
   EXPECT_FALSE(memory_limited);
   EXPECT_EQ(memory_limited.error().code, ErrorCode::resource_limit_exceeded);
 
   crops.push_back(crops.front().clone());
-  limits.max_temporary_bytes = 200'000;
-  auto aggregate_limited = internal::make_recognition_batches(crops, config, 1, limits);
-  EXPECT_FALSE(aggregate_limited);
-  EXPECT_EQ(aggregate_limited.error().code, ErrorCode::resource_limit_exceeded);
+  boxes.push_back(boxes.front());
+  limits.max_temporary_bytes = 250'000;
+  auto streaming_plans = internal::plan_recognition_batches(
+      boxes, geometry, config, 1, limits);
+  EXPECT_TRUE(streaming_plans);
+  EXPECT_EQ(streaming_plans.value().size(), 2u);
+  for (const auto& plan : streaming_plans.value()) {
+    std::vector<cv::Mat> one_crop{crops[plan.samples[0].input_index]};
+    auto batch = internal::make_recognition_batch(one_crop, plan, config, limits);
+    EXPECT_TRUE(batch);
+  }
 
   crops.resize(1);
   limits.max_temporary_bytes = 48 * 320 * 3 * sizeof(float);
-  auto transient_limited = internal::make_recognition_batches(crops, config, 1, limits);
+  auto transient_limited = internal::make_recognition_batch(
+      crops, plans.value()[0], config, limits);
   EXPECT_FALSE(transient_limited);
   EXPECT_EQ(transient_limited.error().code, ErrorCode::resource_limit_exceeded);
 }

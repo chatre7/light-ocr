@@ -13,9 +13,27 @@ namespace light_ocr::internal {
 
 enum class ModelKind { detection, recognition };
 
-struct TensorOutput {
-  std::vector<float> values;
-  std::vector<std::int64_t> shape;
+class TensorOutput {
+ public:
+  TensorOutput(TensorOutput&&) noexcept = default;
+  TensorOutput& operator=(TensorOutput&&) noexcept = default;
+  TensorOutput(const TensorOutput&) = delete;
+  TensorOutput& operator=(const TensorOutput&) = delete;
+
+  const float* data() const noexcept { return data_; }
+  std::size_t size() const noexcept { return size_; }
+  const std::vector<std::int64_t>& shape() const noexcept { return shape_; }
+
+ private:
+  friend class OnnxSession;
+
+  TensorOutput(Ort::Value value, std::vector<std::int64_t> shape,
+               std::size_t size);
+
+  Ort::Value value_;
+  const float* data_ = nullptr;
+  std::vector<std::int64_t> shape_;
+  std::size_t size_ = 0;
 };
 
 class OnnxSession {

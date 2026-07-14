@@ -19,7 +19,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK_PATH = ROOT / "models" / "bundles.lock.json"
-DEFAULT_OUTPUT = ROOT / "models" / "generated" / "ppocrv6-small-onnx-20260713.1"
+DEFAULT_OUTPUT = ROOT / "models" / "generated" / "ppocrv6-small-onnx-20260714.1"
 
 
 def sha256(data: bytes) -> str:
@@ -140,7 +140,7 @@ def extract_dictionary(config: bytes) -> list[str]:
 
 def normalized_config(bundle_id: str, dictionary_entries: int) -> dict[str, object]:
     return {
-        "schemaVersion": "1.0",
+        "schemaVersion": "1.1",
         "bundleId": bundle_id,
         "resourceLimits": {
             "maxWidth": 10_000,
@@ -153,19 +153,28 @@ def normalized_config(bundle_id: str, dictionary_entries: int) -> dict[str, obje
             "maxTemporaryBytes": 512 * 1024 * 1024,
             "maxConcurrentCalls": 1,
         },
+        "sourceDetectionResize": {
+            "limitSideLen": 64,
+            "limitType": "min",
+            "maxSideLimit": 4_000,
+            "dimensionMultiple": 32,
+            "minimumDimension": 32,
+            "scaledDimensionRounding": "truncate_toward_zero",
+            "multipleRounding": "half_to_even",
+            "maxSideLimitOrder": "before_multiple_rounding",
+            "interpolation": "linear",
+        },
+        "runtimeDefaults": {
+            "detection": {
+                "strategy": "bounded",
+                "maxSide": 960,
+                "minimumShortSide": 64,
+                "dimensionMultipleRounding": "ceil",
+            },
+            "recognitionBatchSize": 1,
+        },
         "detection": {
             "input": {"colorOrder": "BGR", "tensorLayout": "NCHW", "tensorType": "float32"},
-            "resize": {
-                "limitSideLen": 64,
-                "limitType": "min",
-                "maxSideLimit": 4_000,
-                "dimensionMultiple": 32,
-                "minimumDimension": 32,
-                "scaledDimensionRounding": "truncate_toward_zero",
-                "multipleRounding": "half_to_even",
-                "maxSideLimitOrder": "before_multiple_rounding",
-                "interpolation": "linear",
-            },
             "normalize": {
                 "scale": 1 / 255,
                 "mean": [0.485, 0.456, 0.406],
@@ -209,7 +218,7 @@ def normalized_config(bundle_id: str, dictionary_entries: int) -> dict[str, obje
                 "std": [0.5, 0.5, 0.5],
                 "paddingValue": 0.0,
             },
-            "batch": {"defaultSize": 8, "maximumSize": 8, "sortByWidth": True},
+            "batch": {"maximumSize": 8, "sortByWidth": True},
             "decode": {
                 "algorithm": "CTC",
                 "blankIndex": 0,

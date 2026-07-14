@@ -12,7 +12,7 @@ const { createEngine, OcrError } = require('../js/index.cjs');
 const repositoryRoot = path.resolve(__dirname, '../../..');
 const bundlePath = path.resolve(
   process.env.LIGHT_OCR_MODEL_BUNDLE ||
-    path.join(repositoryRoot, 'models/generated/ppocrv6-small-onnx-20260713.1'),
+    path.join(repositoryRoot, 'models/generated/ppocrv6-small-onnx-20260714.1'),
 );
 
 function loadFixture(id) {
@@ -39,7 +39,10 @@ test('ESM and CommonJS facades expose the same API', async () => {
 
 test('loads PP-OCRv6, snapshots pixels, maps results, and closes idempotently', async () => {
   const engine = await createEngine({ bundlePath });
-  assert.equal(engine.info.modelBundleId, 'ppocrv6-small-onnx-20260713.1');
+  assert.equal(engine.info.modelBundleId, 'ppocrv6-small-onnx-20260714.1');
+  assert.equal(engine.info.detectionStrategy, 'bounded');
+  assert.equal(engine.info.detectionMaxSide, 960);
+  assert.equal(engine.info.defaultRecognitionBatchSize, 1);
   assert.equal(engine.info.adapter.scheduler, 'dedicated_fifo');
   assert.equal(engine.info.limits.maxConcurrentCalls, 1);
   assert.ok(Object.isFrozen(engine.info));
@@ -57,6 +60,9 @@ test('loads PP-OCRv6, snapshots pixels, maps results, and closes idempotently', 
   assert.equal(result.imageHeight, 180);
   assert.equal(result.modelBundleId, engine.info.modelBundleId);
   assert.equal(result.diagnostics.acceptedBoxes, 1);
+  assert.equal(result.diagnostics.detectionInputWidth, 800);
+  assert.equal(result.diagnostics.detectionInputHeight, 192);
+  assert.deepEqual(result.diagnostics.recognitionBatchShapes.map((shape) => shape.batchSize), [1]);
 
   const closeA = engine.close();
   const closeB = engine.close();
@@ -106,6 +112,36 @@ test('validates input and reports adapter errors as OcrError', async () => {
     );
   }
   await engine.close();
+});
+
+test('maps bounded request limits and explicit upstream-exact engine options', async () => {
+  const bounded = await createEngine({ bundlePath });
+  const image = loadFixture('generated-hello-123');
+  const boundedResult = await bounded.recognize(image, { detectionMaxSide: 640 });
+  assert.deepEqual(boundedResult.lines.map((line) => line.text), ['HELLO 123']);
+  await assert.rejects(
+    bounded.recognize(image, { detectionMaxSide: 992 }),
+    (error) => error instanceof OcrError && error.code === 'invalid_argument',
+  );
+  await bounded.close();
+
+  const exact = await createEngine({
+    bundlePath,
+    detection: { strategy: 'upstreamExact' },
+    recognitionBatchSize: 8,
+  });
+  assert.equal(exact.info.detectionStrategy, 'upstreamExact');
+  assert.equal(exact.info.detectionMaxSide, 4000);
+  assert.equal(exact.info.defaultRecognitionBatchSize, 8);
+  await exact.close();
+
+  await assert.rejects(
+    createEngine({
+      bundlePath,
+      detection: { strategy: 'upstreamExact', maxSide: 960 },
+    }),
+    (error) => error instanceof OcrError && error.code === 'invalid_argument',
+  );
 });
 
 test('secure bundle loading rejects a symbolic-link root', async (t) => {

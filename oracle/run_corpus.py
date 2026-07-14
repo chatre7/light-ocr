@@ -20,6 +20,11 @@ def main() -> int:
         action="store_true",
         help="compare with the pinned oracle on this machine instead of locked stage goldens",
     )
+    parser.add_argument(
+        "--profile",
+        choices=["upstream_exact", "bounded_default"],
+        default="upstream_exact",
+    )
     arguments = parser.parse_args()
     runner = Path(__file__).with_name("run_parity.py")
     reports = []
@@ -31,6 +36,7 @@ def main() -> int:
             "--bundle", str(arguments.bundle),
             "--fixture", str(fixture),
             "--report", str(report_path),
+            "--profile", arguments.profile,
         ]
         if arguments.live_oracle:
             command.append("--live-oracle")
@@ -50,6 +56,7 @@ def main() -> int:
         "schemaVersion": "1.0",
         "passed": all(report["passed"] for report in reports),
         "fixtureCount": len(reports),
+        "profile": arguments.profile,
         "fixtures": reports,
     }
     arguments.report_dir.mkdir(parents=True, exist_ok=True)

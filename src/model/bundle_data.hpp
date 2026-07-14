@@ -59,6 +59,8 @@ struct BundleData {
   std::string recognition_model_path;
   std::unordered_map<std::string, SharedBytes> files;
   DetectionConfig detection;
+  DetectionStrategy default_detection_strategy = DetectionStrategy::upstream_exact;
+  std::uint32_t default_detection_max_side = 4'000;
   GeometryConfig geometry;
   RecognitionConfig recognition;
   ResourceLimits limits;

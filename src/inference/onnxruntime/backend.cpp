@@ -75,6 +75,13 @@ OnnxSession::OnnxSession(std::unique_ptr<Ort::Session> session, std::string inpu
       input_name_(std::move(input_name)),
       output_name_(std::move(output_name)) {}
 
+TensorOutput::TensorOutput(Ort::Value value, std::vector<std::int64_t> shape,
+                           std::size_t size)
+    : value_(std::move(value)),
+      data_(value_.GetTensorData<float>()),
+      shape_(std::move(shape)),
+      size_(size) {}
+
 Result<std::unique_ptr<OnnxSession>> OnnxSession::create(
     const SharedBytes& model, std::uint32_t intra_op_threads,
     std::uint32_t inter_op_threads, ModelKind kind,
@@ -149,11 +156,9 @@ Result<TensorOutput> OnnxSession::run(const std::vector<float>& values,
                                            "Inference output is not float32");
     }
     const auto count = info.GetElementCount();
-    const auto* output_data = outputs[0].GetTensorData<float>();
-    TensorOutput result;
-    result.shape = info.GetShape();
-    result.values.assign(output_data, output_data + count);
-    return Result<TensorOutput>::success(std::move(result));
+    auto shape = info.GetShape();
+    return Result<TensorOutput>::success(
+        TensorOutput(std::move(outputs[0]), std::move(shape), count));
   } catch (const Ort::Exception& exception) {
     return runtime_failure<TensorOutput>(ErrorCode::inference_failed,
                                          "ONNX Runtime inference failed", exception.what());

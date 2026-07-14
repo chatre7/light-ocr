@@ -51,7 +51,12 @@ int main(int argc, char** argv) {
     const auto load_end = std::chrono::steady_clock::now();
 
     const auto initialize_begin = std::chrono::steady_clock::now();
-    auto engine = light_ocr::Engine::create(std::move(bundle).value());
+    light_ocr::EngineOptions engine_options;
+    if (arguments.profile == "upstream_exact") {
+      engine_options.detection.strategy = light_ocr::DetectionStrategy::upstream_exact;
+      engine_options.recognition_batch_size = 8;
+    }
+    auto engine = light_ocr::Engine::create(std::move(bundle).value(), engine_options);
     if (!engine) throw std::runtime_error(engine.error().message + ": " + engine.error().detail);
     const auto initialize_end = std::chrono::steady_clock::now();
 
@@ -72,14 +77,29 @@ int main(int argc, char** argv) {
     total.reserve(arguments.iterations);
     inference_only.reserve(arguments.iterations);
     resident.reserve(arguments.iterations);
+    std::uint32_t accepted_boxes = 0;
+    std::size_t accepted_lines = 0;
+    std::uint32_t detection_input_width = 0;
+    std::uint32_t detection_input_height = 0;
+    std::vector<light_ocr::RecognitionBatchShape> recognition_batch_shapes;
+    light_ocr::RecognizeOptions recognize_options;
+    recognize_options.include_diagnostics = true;
     for (auto& samples : stages) samples.reserve(arguments.iterations);
 
     for (std::uint32_t index = 0; index < arguments.iterations; ++index) {
       const auto begin = std::chrono::steady_clock::now();
-      auto result = engine.value()->recognize(image);
+      auto result = engine.value()->recognize(image, recognize_options);
       const auto end = std::chrono::steady_clock::now();
       if (!result) throw std::runtime_error(result.error().message + ": " + result.error().detail);
       const auto& timing = result.value().timing;
+      accepted_lines = result.value().lines.size();
+      if (result.value().diagnostics) {
+        accepted_boxes = result.value().diagnostics->accepted_boxes;
+        detection_input_width = result.value().diagnostics->detection_input_width;
+        detection_input_height = result.value().diagnostics->detection_input_height;
+        recognition_batch_shapes =
+            result.value().diagnostics->recognition_batch_shapes;
+      }
       wall.push_back(elapsed_us(begin, end));
       total.push_back(timing.total_us);
       inference_only.push_back(timing.detection_inference_us + timing.recognition_inference_us);
@@ -103,12 +123,30 @@ int main(int argc, char** argv) {
       stage_report[stage_names[index]] = distribution(std::move(stages[index]));
     }
     const auto resident_minmax = std::minmax_element(resident.begin(), resident.end());
-    const auto model_bundle_id = engine.value()->info().model_bundle_id;
+    const auto engine_info = engine.value()->info();
+    const auto model_bundle_id = engine_info.model_bundle_id;
+    const auto detection_strategy =
+        engine_info.detection_strategy == light_ocr::DetectionStrategy::bounded
+            ? "bounded"
+            : "upstreamExact";
+    nlohmann::json recognition_shapes = nlohmann::json::array();
+    for (const auto& shape : recognition_batch_shapes) {
+      recognition_shapes.push_back({shape.batch_size, 3, shape.height, shape.width});
+    }
     engine.value()->close();
 
     std::cout << nlohmann::json({
         {"schemaVersion", "1.0"}, {"ok", true}, {"backend", "native-cpp"},
         {"modelBundleId", model_bundle_id}, {"modelBundleBytes", model_bundle_bytes},
+        {"profile", arguments.profile},
+        {"runtime", {{"detectionStrategy", detection_strategy},
+                     {"detectionMaxSide", engine_info.detection_max_side},
+                     {"recognitionBatchSize", engine_info.default_recognition_batch_size}}},
+        {"result", {{"acceptedBoxes", accepted_boxes},
+                    {"acceptedLines", accepted_lines},
+                    {"detectionInputShape", {1, 3, detection_input_height,
+                                              detection_input_width}},
+                    {"recognitionBatchShapes", std::move(recognition_shapes)}}},
         {"loadUs", elapsed_us(load_begin, load_end)},
         {"engineInitializationUs", elapsed_us(initialize_begin, initialize_end)},
         {"warmup", arguments.warmup}, {"iterations", arguments.iterations},

@@ -77,6 +77,27 @@ class BootstrapModelsTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "SHA-256 mismatch"):
                 bootstrap_models.obtain_artifact_members(self.artifact, Path(cache))
 
+    def test_normalized_config_separates_source_defaults_and_ceilings(self) -> None:
+        config = bootstrap_models.normalized_config("test-bundle", 18_709)
+        self.assertEqual(config["schemaVersion"], "1.1")
+        self.assertEqual(config["sourceDetectionResize"]["limitType"], "min")
+        self.assertEqual(config["sourceDetectionResize"]["maxSideLimit"], 4_000)
+        self.assertEqual(
+            config["runtimeDefaults"],
+            {
+                "detection": {
+                    "strategy": "bounded",
+                    "maxSide": 960,
+                    "minimumShortSide": 64,
+                    "dimensionMultipleRounding": "ceil",
+                },
+                "recognitionBatchSize": 1,
+            },
+        )
+        self.assertEqual(config["resourceLimits"]["maxRecognitionBatchSize"], 8)
+        self.assertNotIn("resize", config["detection"])
+        self.assertNotIn("defaultSize", config["recognition"]["batch"])
+
 
 if __name__ == "__main__":
     unittest.main()

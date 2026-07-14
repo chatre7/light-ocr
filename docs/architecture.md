@@ -185,10 +185,10 @@ One recognition call executes:
 5. Run detection inference.
 6. Validate detection output shape.
 7. Run DB postprocessing and restore coordinates.
-8. Sort boxes and create crops.
-9. Sort crop indices by width and create bounded recognition batches.
-10. Run recognition inference for each batch.
-11. Decode CTC outputs and restore original line order.
+8. Sort boxes and create lightweight recognition batch plans from box geometry.
+9. Crop and normalize only the current recognition batch.
+10. Run recognition inference and decode directly from the owning ORT output view.
+11. Release the current crop/input/output, then continue; restore original line order by index.
 12. Filter, assemble diagnostics, and validate the public result.
 13. Release request memory and admission.
 
@@ -205,7 +205,8 @@ Failures stop the pipeline immediately. Partially constructed public results are
 | Effective defaults and limits | Engine | Engine lifetime |
 | Input image bytes | Caller | Synchronous call only |
 | Converted images and tensors | Request context | One recognize call |
-| Crops and decoded candidates | Request context | One recognize call |
+| Current-batch crops/input/output | Request context | One recognition batch |
+| Decoded candidates and batch plans | Request context | One recognize call |
 | Public result | Caller after move | Caller-controlled |
 
 No request-scoped object is stored in process-global mutable state.
@@ -249,15 +250,17 @@ This deliberately avoids an internal executor before N-API requirements exist.
 
 ## 8. Memory and resource control
 
+Core 0.1.0 implements D013's bounded detection and one-batch-at-a-time recognition lifecycle. `tiled` remains a separately gated second phase.
+
 Before the relevant Core-owned allocation, the request checks:
 
 - Required input bytes.
 - Converted image bytes.
 - Detection tensor plus resize/padding workspace while the converted image is live.
-- Aggregate crop pixels while the converted image is live.
-- Aggregate recognition input tensors across all batches plus the largest transient resize while crops are live.
+- Current-batch crop pixels while the converted image is live.
+- One recognition input tensor plus its current-batch resize workspace.
 
-If a declared limit or arithmetic bound would be exceeded, the call fails with `resource_limit_exceeded` before that allocation. Converted image storage is released before recognition inference; crops are released after recognition tensors are built; each batch input is released after its inference call.
+If a declared limit or arithmetic bound would be exceeded, the call fails with `resource_limit_exceeded` before that allocation. The converted BGR image remains live only while source-region crops are still needed. Current crops are released after their input tensor is built, the input tensor is released after inference, and decode consumes the owning ORT output without a full output copy.
 
 `max_temporary_bytes` is an application-owned buffer budget, not a byte-exact cap on ONNX Runtime's allocator, graph workspace, output tensors, OpenCV contour internals, STL metadata, or the final public result. Those process-level allocations are constrained by validated model/tensor contracts and exercised by the RSS/leak and malformed-tensor tests. The implementation retains no reusable request buffer between calls.
 
@@ -315,6 +318,7 @@ src/
 tools/
   validate/
   benchmark/
+  memory_gate/
   leak_check/
   stage_probe/
 tests/

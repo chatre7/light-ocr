@@ -11,6 +11,8 @@ namespace light_ocr {
 
 enum class PixelFormat { gray8, rgb8, bgr8, rgba8 };
 
+enum class DetectionStrategy { bounded, upstream_exact };
+
 struct ImageView {
   const std::uint8_t* data = nullptr;
   std::size_t size = 0;
@@ -47,11 +49,20 @@ struct DiagnosticWarning {
   std::string message;
 };
 
+struct RecognitionBatchShape {
+  std::uint32_t batch_size = 0;
+  std::uint32_t height = 0;
+  std::uint32_t width = 0;
+};
+
 struct Diagnostics {
   std::vector<RejectedLine> rejected_lines;
   std::vector<DiagnosticWarning> warnings;
   std::uint32_t detected_candidates = 0;
   std::uint32_t accepted_boxes = 0;
+  std::uint32_t detection_input_width = 0;
+  std::uint32_t detection_input_height = 0;
+  std::vector<RecognitionBatchShape> recognition_batch_shapes;
 };
 
 struct Timing {
@@ -87,12 +98,18 @@ struct ResourceLimits {
   std::uint32_t max_concurrent_calls = 1;
 };
 
+struct DetectionOptions {
+  std::optional<DetectionStrategy> strategy;
+  std::optional<std::uint32_t> max_side;
+};
+
 struct EngineOptions {
   std::uint32_t intra_op_threads = 1;
   std::uint32_t inter_op_threads = 1;
   std::optional<float> recognition_score_threshold;
   std::optional<std::uint32_t> recognition_batch_size;
   std::optional<ResourceLimits> reduced_limits;
+  DetectionOptions detection;
 };
 
 struct RecognizeOptions {
@@ -100,6 +117,7 @@ struct RecognizeOptions {
   std::optional<std::uint32_t> recognition_batch_size;
   bool include_diagnostics = false;
   bool use_textline_orientation = false;
+  std::optional<std::uint32_t> detection_max_side;
 };
 
 enum class ConcurrencyMode { serialized_reject_when_busy };
@@ -121,8 +139,10 @@ struct EngineInfo {
   ResourceLimits limits;
   std::uint32_t intra_op_threads = 1;
   std::uint32_t inter_op_threads = 1;
+  DetectionStrategy detection_strategy = DetectionStrategy::bounded;
+  std::uint32_t detection_max_side = 960;
   float default_recognition_score_threshold = 0;
-  std::uint32_t default_recognition_batch_size = 8;
+  std::uint32_t default_recognition_batch_size = 1;
 };
 
 }  // namespace light_ocr

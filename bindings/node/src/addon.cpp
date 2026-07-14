@@ -312,12 +312,34 @@ ResourceLimits parse_resource_limits(napi_env env, napi_value value) {
   return limits;
 }
 
+DetectionStrategy parse_detection_strategy(napi_env env, napi_value value) {
+  const auto strategy = get_string(env, value, "detection.strategy");
+  if (strategy == "bounded") return DetectionStrategy::bounded;
+  if (strategy == "upstreamExact") return DetectionStrategy::upstream_exact;
+  throw AddonFailure("invalid_argument",
+                     "detection.strategy must be bounded or upstreamExact");
+}
+
+DetectionOptions parse_detection_options(napi_env env, napi_value value) {
+  require_object(env, value, "detection");
+  const std::unordered_set<std::string> allowed{"strategy", "maxSide"};
+  reject_unknown_properties(env, value, allowed, "detection");
+  DetectionOptions parsed;
+  if (const auto option = optional_named(env, value, "strategy")) {
+    parsed.strategy = parse_detection_strategy(env, *option);
+  }
+  if (const auto option = optional_named(env, value, "maxSide")) {
+    parsed.max_side = get_u32(env, *option, "detection.maxSide", 1);
+  }
+  return parsed;
+}
+
 ParsedCreateOptions parse_create_options(napi_env env, napi_value value) {
   require_object(env, value, "createEngine options");
   const std::unordered_set<std::string> allowed{
       "bundlePath",          "intraOpThreads",   "interOpThreads",
       "recognitionScoreThreshold", "recognitionBatchSize", "reducedLimits",
-      "queueCapacity",       "maxPendingInputBytes"};
+      "queueCapacity",       "maxPendingInputBytes", "detection"};
   reject_unknown_properties(env, value, allowed, "createEngine options");
   if (!has_own(env, value, "bundlePath")) {
     throw AddonFailure("invalid_argument", "bundlePath is required");
@@ -348,6 +370,9 @@ ParsedCreateOptions parse_create_options(napi_env env, napi_value value) {
   if (const auto option = optional_named(env, value, "reducedLimits")) {
     parsed.core.reduced_limits = parse_resource_limits(env, *option);
   }
+  if (const auto option = optional_named(env, value, "detection")) {
+    parsed.core.detection = parse_detection_options(env, *option);
+  }
   if (const auto option = optional_named(env, value, "queueCapacity")) {
     parsed.queue_capacity = get_u32(env, *option, "queueCapacity", 1);
     if (parsed.queue_capacity > kMaximumQueueCapacity) {
@@ -371,7 +396,7 @@ RecognizeOptions parse_recognize_options(napi_env env, napi_value value,
   require_object(env, value, "recognize options");
   const std::unordered_set<std::string> allowed{
       "recognitionScoreThreshold", "recognitionBatchSize", "includeDiagnostics",
-      "useTextlineOrientation"};
+      "useTextlineOrientation", "detectionMaxSide"};
   reject_unknown_properties(env, value, allowed, "recognize options");
   if (const auto option = optional_named(env, value, "recognitionScoreThreshold")) {
     const double score = get_number(env, *option, "recognitionScoreThreshold");
@@ -389,6 +414,16 @@ RecognizeOptions parse_recognize_options(napi_env env, napi_value value,
   }
   if (const auto option = optional_named(env, value, "includeDiagnostics")) {
     parsed.include_diagnostics = get_boolean(env, *option, "includeDiagnostics");
+  }
+  if (const auto option = optional_named(env, value, "detectionMaxSide")) {
+    parsed.detection_max_side =
+        get_u32(env, *option, "detectionMaxSide", 1);
+    if (info.detection_strategy != DetectionStrategy::bounded ||
+        *parsed.detection_max_side > info.detection_max_side) {
+      throw AddonFailure(
+          "invalid_argument",
+          "detectionMaxSide requires bounded mode and cannot increase the engine default");
+    }
   }
   if (const auto option = optional_named(env, value, "useTextlineOrientation")) {
     parsed.use_textline_orientation = get_boolean(env, *option, "useTextlineOrientation");
@@ -947,6 +982,29 @@ napi_value create_diagnostics(napi_env env, const Diagnostics& diagnostics) {
   set_named(env, object, "warnings", warnings);
   set_named(env, object, "detectedCandidates", uint32_value(env, diagnostics.detected_candidates));
   set_named(env, object, "acceptedBoxes", uint32_value(env, diagnostics.accepted_boxes));
+  set_named(env, object, "detectionInputWidth",
+            uint32_value(env, diagnostics.detection_input_width));
+  set_named(env, object, "detectionInputHeight",
+            uint32_value(env, diagnostics.detection_input_height));
+  napi_value batch_shapes = nullptr;
+  check(env,
+        napi_create_array_with_length(env, diagnostics.recognition_batch_shapes.size(),
+                                      &batch_shapes),
+        "create recognition batch shapes");
+  for (std::size_t index = 0;
+       index < diagnostics.recognition_batch_shapes.size(); ++index) {
+    const auto& shape = diagnostics.recognition_batch_shapes[index];
+    napi_value entry = nullptr;
+    check(env, napi_create_object(env, &entry), "create recognition batch shape");
+    set_named(env, entry, "batchSize", uint32_value(env, shape.batch_size));
+    set_named(env, entry, "height", uint32_value(env, shape.height));
+    set_named(env, entry, "width", uint32_value(env, shape.width));
+    check(env,
+          napi_set_element(env, batch_shapes, static_cast<std::uint32_t>(index),
+                           entry),
+          "set recognition batch shape");
+  }
+  set_named(env, object, "recognitionBatchShapes", batch_shapes);
   return object;
 }
 
@@ -1011,6 +1069,12 @@ napi_value create_engine_info(napi_env env, const EngineState& engine) {
   set_named(env, object, "limits", create_resource_limits(env, info.limits));
   set_named(env, object, "intraOpThreads", uint32_value(env, info.intra_op_threads));
   set_named(env, object, "interOpThreads", uint32_value(env, info.inter_op_threads));
+  set_named(env, object, "detectionStrategy",
+            string_value(env, info.detection_strategy == DetectionStrategy::bounded
+                                  ? "bounded"
+                                  : "upstreamExact"));
+  set_named(env, object, "detectionMaxSide",
+            uint32_value(env, info.detection_max_side));
   set_named(env, object, "defaultRecognitionScoreThreshold",
             double_value(env, info.default_recognition_score_threshold));
   set_named(env, object, "defaultRecognitionBatchSize",

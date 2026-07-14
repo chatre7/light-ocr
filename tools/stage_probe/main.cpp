@@ -45,20 +45,28 @@ Json shape_json(const std::vector<std::int64_t>& shape) {
   return result;
 }
 
-Json samples_json(const std::vector<float>& values) {
+Json samples_json(const float* values, std::size_t size) {
   Json result = Json::array();
-  if (values.empty()) return result;
+  if (size == 0) return result;
   std::vector<std::size_t> indices = {
-      0, values.size() / 4, values.size() / 2, (values.size() * 3) / 4, values.size() - 1};
+      0, size / 4, size / 2, (size * 3) / 4, size - 1};
   std::sort(indices.begin(), indices.end());
   indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
   for (const auto index : indices) result.push_back({{"index", index}, {"value", values[index]}});
   return result;
 }
 
+std::string float_hash(const float* values, std::size_t size) {
+  return sha256_hex(reinterpret_cast<const std::uint8_t*>(values),
+                    size * sizeof(float));
+}
+
+Json samples_json(const std::vector<float>& values) {
+  return samples_json(values.data(), values.size());
+}
+
 std::string float_hash(const std::vector<float>& values) {
-  return sha256_hex(reinterpret_cast<const std::uint8_t*>(values.data()),
-                    values.size() * sizeof(float));
+  return float_hash(values.data(), values.size());
 }
 
 std::vector<std::uint8_t> mat_bytes(const cv::Mat& matrix) {
@@ -126,7 +134,7 @@ Json decoded_json(const DecodedText& decoded) {
 class StageProbe {
  public:
   static Json run(const ModelBundle& bundle, const ImageView& image,
-                  std::uint32_t batch_size = 0) {
+                  const std::string& profile = "upstream_exact") {
     if (!bundle.data_) throw std::runtime_error("validated bundle data is unavailable");
     const auto& data = *bundle.data_;
     const auto& detection_bytes = data.files.at(data.detection_model_path);
@@ -139,25 +147,40 @@ class StageProbe {
                             data.recognition.characters.size() + 1),
         "recognition session");
     auto validated = checked(validate_and_convert_image(image, data.limits), "image");
-    auto detection_input =
-        checked(make_detection_input(validated.bgr, data.detection, data.limits),
-                "detection preprocess");
+    const auto upstream_exact = profile == "upstream_exact";
+    if (!upstream_exact && profile != "bounded_default" &&
+        profile != "runtime_default") {
+      throw std::runtime_error("unsupported stage-probe profile: " + profile);
+    }
+    const auto detection_strategy =
+        upstream_exact ? DetectionStrategy::upstream_exact
+                       : data.default_detection_strategy;
+    const auto detection_max_side =
+        upstream_exact ? data.detection.max_side_limit
+                       : data.default_detection_max_side;
+    const auto batch_size = upstream_exact
+                                ? data.recognition.maximum_batch_size
+                                : data.recognition.default_batch_size;
+    auto detection_input = checked(
+        make_detection_input(validated.bgr, data.detection, detection_strategy,
+                             detection_max_side, data.limits),
+        "detection preprocess");
     auto detection_output =
         checked(detection_session->run(detection_input.values, detection_input.shape),
                 "detection inference");
     auto detected = checked(
-        db_postprocess(detection_output.values.data(), detection_output.values.size(),
-                       detection_output.shape, image.width, image.height, data.detection,
+        db_postprocess(detection_output.data(), detection_output.size(),
+                       detection_output.shape(), image.width, image.height, data.detection,
                        data.limits, true),
         "detection postprocess");
     const auto sorted_boxes = sort_reading_order(detected.boxes, data.geometry);
     auto crops =
         checked(crop_text_regions(validated.bgr, sorted_boxes, data.geometry, data.limits),
                 "crop");
-    if (batch_size == 0) batch_size = data.recognition.default_batch_size;
-    auto batches = checked(
-        make_recognition_batches(crops, data.recognition, batch_size, data.limits),
-        "recognition preprocess");
+    auto plans = checked(
+        plan_recognition_batches(sorted_boxes, data.geometry, data.recognition,
+                                 batch_size, data.limits),
+        "recognition plan");
 
     Json output = {
         {"schemaVersion", "1.0"},
@@ -175,9 +198,9 @@ class StageProbe {
           {"sha256Float32LE", float_hash(detection_input.values)},
           {"samples", samples_json(detection_input.values)}}},
         {"detectionOutput",
-         {{"shape", shape_json(detection_output.shape)},
-          {"sha256Float32LE", float_hash(detection_output.values)},
-          {"samples", samples_json(detection_output.values)}}},
+         {{"shape", shape_json(detection_output.shape())},
+          {"sha256Float32LE", float_hash(detection_output.data(), detection_output.size())},
+          {"samples", samples_json(detection_output.data(), detection_output.size())}}},
         {"contourCandidates", detected.contour_candidates},
         {"thresholdBitmapSha256", detected.threshold_bitmap_sha256},
         {"detectionCandidates", Json::array()},
@@ -202,13 +225,21 @@ class StageProbe {
     }
 
     std::vector<DecodedText> decoded(sorted_boxes.size());
-    for (std::size_t batch_index = 0; batch_index < batches.size(); ++batch_index) {
-      const auto& batch = batches[batch_index];
+    for (std::size_t batch_index = 0; batch_index < plans.size(); ++batch_index) {
+      const auto& plan = plans[batch_index];
+      std::vector<cv::Mat> batch_crops;
+      batch_crops.reserve(plan.samples.size());
+      for (const auto& sample : plan.samples) {
+        batch_crops.push_back(crops[sample.input_index]);
+      }
+      auto batch = checked(
+          make_recognition_batch(batch_crops, plan, data.recognition, data.limits),
+          "recognition preprocess");
       auto recognition_output =
           checked(recognition_session->run(batch.values, batch.shape), "recognition inference");
       auto batch_decoded = checked(
-          decode_ctc(recognition_output.values.data(), recognition_output.values.size(),
-                     recognition_output.shape, data.recognition.characters,
+          decode_ctc(recognition_output.data(), recognition_output.size(),
+                     recognition_output.shape(), data.recognition.characters,
                      data.recognition.blank_index, data.recognition.collapse_repeats),
           "recognition decode");
       if (batch_decoded.size() != batch.input_indices.size()) {
@@ -220,9 +251,9 @@ class StageProbe {
           {"inputShape", shape_json(batch.shape)},
           {"inputSha256Float32LE", float_hash(batch.values)},
           {"inputSamples", samples_json(batch.values)},
-          {"outputShape", shape_json(recognition_output.shape)},
-          {"outputSha256Float32LE", float_hash(recognition_output.values)},
-          {"outputSamples", samples_json(recognition_output.values)},
+          {"outputShape", shape_json(recognition_output.shape())},
+          {"outputSha256Float32LE", float_hash(recognition_output.data(), recognition_output.size())},
+          {"outputSamples", samples_json(recognition_output.data(), recognition_output.size())},
       };
       output["recognitionBatches"].push_back(std::move(batch_record));
       for (std::size_t index = 0; index < batch.input_indices.size(); ++index) {
@@ -257,7 +288,9 @@ int main(int argc, char** argv) {
     auto pixels = light_ocr::tools::read_binary_file(arguments.pixels);
     const light_ocr::ImageView image{pixels.data(), pixels.size(), arguments.width,
                                      arguments.height, arguments.stride, arguments.format};
-    std::cout << light_ocr::internal::StageProbe::run(bundle.value(), image).dump()
+    std::cout << light_ocr::internal::StageProbe::run(bundle.value(), image,
+                                                      arguments.profile)
+                     .dump()
               << '\n';
     return 0;
   } catch (const std::exception& exception) {

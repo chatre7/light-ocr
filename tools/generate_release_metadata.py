@@ -137,7 +137,7 @@ def copy_licenses(build: Path, output: Path) -> list[dict[str, str]]:
         (source_dir(build, "clipper") / "LICENSE", "clipper-BSL-1.0.txt", "clipper"),
         (source_dir(build, "nlohmann_json") / "LICENSE.MIT", "nlohmann-json-MIT.txt", "nlohmann-json"),
     ]
-    bundle = ROOT / "models" / "generated" / "ppocrv6-small-onnx-20260713.1"
+    bundle = ROOT / "models" / "generated" / "ppocrv6-small-onnx-20260714.1"
     sources.extend([
         (bundle / "LICENSES" / "PaddleOCR-Apache-2.0.txt", "PP-OCRv6-Apache-2.0.txt", "PP-OCRv6-models"),
         (bundle / "LICENSES" / "MODEL-NOTICE.md", "PP-OCRv6-MODEL-NOTICE.md", "PP-OCRv6-models"),

@@ -33,12 +33,23 @@ struct RecognitionBatch {
   std::vector<std::int64_t> shape;
 };
 
+struct RecognitionBatchPlan {
+  std::vector<RecognitionSample> samples;
+};
+
 Result<DetectionInput> make_detection_input(const cv::Mat& bgr,
                                             const DetectionConfig& config,
+                                            DetectionStrategy strategy,
+                                            std::uint32_t max_side,
                                             const ResourceLimits& limits);
 
-Result<std::vector<RecognitionBatch>> make_recognition_batches(
-    const std::vector<cv::Mat>& crops, const RecognitionConfig& config,
-    std::uint32_t batch_size, const ResourceLimits& limits);
+Result<std::vector<RecognitionBatchPlan>> plan_recognition_batches(
+    const std::vector<Quad>& boxes, const GeometryConfig& geometry,
+    const RecognitionConfig& config, std::uint32_t batch_size,
+    const ResourceLimits& limits);
+
+Result<RecognitionBatch> make_recognition_batch(
+    const std::vector<cv::Mat>& crops, const RecognitionBatchPlan& plan,
+    const RecognitionConfig& config, const ResourceLimits& limits);
 
 }  // namespace light_ocr::internal

@@ -61,7 +61,7 @@ if(LIGHT_OCR_BUILD_TESTS)
     find_program(LIGHT_OCR_NODE_EXECUTABLE NAMES node)
   endif()
   set(_light_ocr_test_bundle
-    "${PROJECT_SOURCE_DIR}/models/generated/ppocrv6-small-onnx-20260713.1")
+    "${PROJECT_SOURCE_DIR}/models/generated/ppocrv6-small-onnx-20260714.1")
   if(LIGHT_OCR_NODE_EXECUTABLE AND
      EXISTS "${_light_ocr_test_bundle}/manifest.json")
     add_test(NAME light_ocr_node_tests

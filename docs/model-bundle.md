@@ -9,7 +9,7 @@ Requirements: [requirements.md](requirements.md)
 The first Core bundle is:
 
 ```text
-bundleId: ppocrv6-small-onnx-20260713.1
+bundleId: ppocrv6-small-onnx-20260714.1
 family: PP-OCRv6
 detection: PP-OCRv6_small_det_onnx
 recognition: PP-OCRv6_small_rec_onnx
@@ -64,7 +64,7 @@ The values above are bootstrap observations from the official URLs. Release auto
 ## 4. Bundle layout
 
 ```text
-ppocrv6-small-onnx-20260713.1/
+ppocrv6-small-onnx-20260714.1/
   manifest.json
   normalized-config.json
   det/
@@ -89,7 +89,7 @@ Integrity avoids circular hashes:
 1. `manifest.json` contains SHA-256 for every payload except itself and `SHA256SUMS`.
 2. `SHA256SUMS` contains hashes for all payload files plus `manifest.json`; it excludes itself.
 3. `tools/package_model_bundle.py` creates a deterministic USTAR archive and verifies its identity against `models/bundles.lock.json`.
-4. The locked archive is 31,334,400 bytes with SHA-256 `d320b799ed77511e3743c36d2f23bd8cbcd80d8070d5431f4fb0ec80daa800da`.
+4. The locked archive is 31,334,400 bytes with SHA-256 `74e246bf075c141da51e58515c731298fdabee9fd5bd8feb7cf6c7f4f352de17`.
 5. `@arcships/light-ocr-model-ppocrv6-small` must contain the exact unpacked bundle files and record its npm tarball SHA-256/integrity. Publishing that verified package is the v1 controlled redistribution path. `mirror: null` only means the standalone USTAR archive has no separate mirror; it does not trigger runtime download and is not a prerequisite for the npm topology.
 
 Runtime bundle validation verifies:
@@ -111,7 +111,7 @@ A hash mismatch returns `model_integrity_failed`. A structurally invalid but cor
 ```json
 {
   "schemaVersion": "1.0",
-  "bundleId": "ppocrv6-small-onnx-20260713.1",
+  "bundleId": "ppocrv6-small-onnx-20260714.1",
   "family": "PP-OCRv6",
   "coreCompatibility": {
     "minimum": "0.1.0",
@@ -163,6 +163,8 @@ The real manifest lists every payload file. Core `0.1.x` accepts manifest schema
 
 Runtime code parses only `normalized-config.json`. This prevents YAML-parser differences and silent upstream defaults.
 
+The current normalized-config schema is `1.1`. It separates `sourceDetectionResize` (`64/min/4000` provenance), `runtimeDefaults.detection` (`bounded/960`), and `resourceLimits.maxDetectionSide` (`4000` ceiling). Core still accepts schema `1.0` bundles as the legacy `upstream_exact` / batch-8 contract; it never silently assigns new product defaults to an old bundle.
+
 The same file also fixes the bundle ceilings:
 
 ```json
@@ -181,30 +183,39 @@ The same file also fixes the bundle ceilings:
 }
 ```
 
-Engine options may only reduce these values.
+Engine options may replace runtime defaults only within these hard ceilings; reduced resource-limit objects can only lower the ceilings.
 
 ### 7.1 Detection
 
-The initial effective pipeline configuration is:
+The source provenance and product runtime default are:
 
 ```json
 {
+  "sourceDetectionResize": {
+    "limitSideLen": 64,
+    "limitType": "min",
+    "maxSideLimit": 4000,
+    "dimensionMultiple": 32,
+    "minimumDimension": 32,
+    "scaledDimensionRounding": "truncate_toward_zero",
+    "multipleRounding": "half_to_even",
+    "maxSideLimitOrder": "before_multiple_rounding",
+    "interpolation": "linear"
+  },
+  "runtimeDefaults": {
+    "detection": {
+      "strategy": "bounded",
+      "maxSide": 960,
+      "minimumShortSide": 64,
+      "dimensionMultipleRounding": "ceil"
+    },
+    "recognitionBatchSize": 1
+  },
   "detection": {
     "input": {
       "colorOrder": "BGR",
       "tensorLayout": "NCHW",
       "tensorType": "float32"
-    },
-    "resize": {
-      "limitSideLen": 64,
-      "limitType": "min",
-      "maxSideLimit": 4000,
-      "dimensionMultiple": 32,
-      "minimumDimension": 32,
-      "scaledDimensionRounding": "truncate_toward_zero",
-      "multipleRounding": "half_to_even",
-      "maxSideLimitOrder": "before_multiple_rounding",
-      "interpolation": "linear"
     },
     "normalize": {
       "scale": 0.00392156862745098,
@@ -228,7 +239,7 @@ The initial effective pipeline configuration is:
 
 The official model YAML declares model-level DB values `0.2`, `0.45`, and `1.4`. The values above intentionally select the official v3.7 general OCR/Android pipeline behavior. The oracle harness passes them explicitly. No value is obtained from a stage fallback.
 
-The first generated parity snapshot MUST assert the rounding sequence and every effective value above. A mismatch is a configuration or documentation defect and blocks implementation; stage code does not choose a different fallback.
+`upstream_exact` uses the source half-even rounding. `bounded` raises a short side below 64, caps the long side at its effective maximum, then rounds dimensions upward to 32. Both parity profiles assert the exact sequence; stage code does not choose a different fallback.
 
 ### 7.2 Crop and reading order
 
@@ -268,7 +279,6 @@ The first generated parity snapshot MUST assert the rounding sequence and every 
       "paddingValue": 0.0
     },
     "batch": {
-      "defaultSize": 8,
       "maximumSize": 8,
       "sortByWidth": true
     },

@@ -11,6 +11,7 @@
 - `recognize()` 返回前同步复制本次调用实际需要的像素范围；调用返回后可以立即修改或复用原 Buffer。
 - 支持 `AbortSignal` 协作式取消：queued 请求会从队列移除；running 请求立即拒绝 public Promise，但 Core 会安全运行到返回并丢弃结果。
 - native addon 只接收现有绝对 bundle 目录。当前源码开发调用显式传 `bundlePath`；发布后的 facade 默认使用随 npm 安装的 model package 路径。
+- 产品 engine 默认报告 `detectionStrategy: 'bounded'`、`detectionMaxSide: 960` 和 `defaultRecognitionBatchSize: 1`。`detection: {strategy: 'upstreamExact'}` 只用于显式上游对照；单次 `recognize({detectionMaxSide})` 只能继续降低 bounded engine 的 side。
 
 v1 不支持 encoded image、zero-copy/transfer、运行中 inference 硬中断、Electron 或 Bun。详细契约见 [Node-API 设计](../../docs/napi-design.md)。
 
@@ -40,7 +41,7 @@ macOS/Linux 产物在 `build-node/bin/light_ocr_node.node`，锁定的 ONNX Runt
 
 ```bash
 export LIGHT_OCR_NODE_BINARY="$PWD/build-node/bin/light_ocr_node.node"
-export LIGHT_OCR_MODEL_BUNDLE="$PWD/models/generated/ppocrv6-small-onnx-20260713.1"
+export LIGHT_OCR_MODEL_BUNDLE="$PWD/models/generated/ppocrv6-small-onnx-20260714.1"
 
 node --test --test-concurrency=1 bindings/node/test/adapter.test.cjs
 # 或：ctest --test-dir build-node -R '^light_ocr_node_tests$' --output-on-failure

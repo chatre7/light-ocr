@@ -5,6 +5,8 @@ Authority: public C++ source contract, ownership, lifecycle, errors, and compati
 Requirements: [requirements.md](requirements.md)  
 Architecture: [architecture.md](architecture.md)
 
+The declarations below include the implemented bounded-detection and streaming-recognition contract. The deferred tiled mode is specified separately in [memory-optimization.md](memory-optimization.md).
+
 ## 1. Scope
 
 The Core milestone exposes a C++17 source API. It is intended for the future in-repository N-API adapter and for native tests and development tools.
@@ -188,11 +190,20 @@ struct DiagnosticWarning {
   std::string message;
 };
 
+struct RecognitionBatchShape {
+  std::uint32_t batch_size = 0;
+  std::uint32_t height = 0;
+  std::uint32_t width = 0;
+};
+
 struct Diagnostics {
   std::vector<RejectedLine> rejected_lines;
   std::vector<DiagnosticWarning> warnings;
   std::uint32_t detected_candidates = 0;
   std::uint32_t accepted_boxes = 0;
+  std::uint32_t detection_input_width = 0;
+  std::uint32_t detection_input_height = 0;
+  std::vector<RecognitionBatchShape> recognition_batch_shapes;
 };
 
 struct Timing {
@@ -227,7 +238,7 @@ Geometry rules:
 - Confidence is finite and in `[0, 1]`.
 - Text is valid UTF-8.
 
-Diagnostics are absent unless requested. They contain no raw pixels or tensors.
+Diagnostics are absent unless requested. They contain tensor shapes for parity and memory attribution, but no raw pixels or tensor values.
 
 ## 7. Options and limits
 
@@ -246,12 +257,23 @@ struct ResourceLimits {
   std::uint32_t max_concurrent_calls = 1;
 };
 
+enum class DetectionStrategy {
+  bounded,
+  upstream_exact,
+};
+
+struct DetectionOptions {
+  std::optional<DetectionStrategy> strategy;
+  std::optional<std::uint32_t> max_side;
+};
+
 struct EngineOptions {
   std::uint32_t intra_op_threads = 1;
   std::uint32_t inter_op_threads = 1;
   std::optional<float> recognition_score_threshold;
   std::optional<std::uint32_t> recognition_batch_size;
   std::optional<ResourceLimits> reduced_limits;
+  DetectionOptions detection;
 };
 
 struct RecognizeOptions {
@@ -259,6 +281,7 @@ struct RecognizeOptions {
   std::optional<std::uint32_t> recognition_batch_size;
   bool include_diagnostics = false;
   bool use_textline_orientation = false;
+  std::optional<std::uint32_t> detection_max_side;
 };
 
 }  // namespace light_ocr
@@ -269,6 +292,9 @@ Rules:
 - Thread counts are positive and fixed at creation.
 - Score thresholds are finite and in `[0, 1]`.
 - Batch sizes are positive and no larger than the effective limit.
+- `bounded` defaults to side 960; its side is a positive 32 multiple no larger than the effective detection ceiling.
+- `upstream_exact` uses the source 4,000 ceiling and cannot carry a separate `max_side`.
+- A request may lower a bounded engine's side; it cannot raise it or change strategy.
 - Engine limits may only reduce bundle limits.
 - `max_temporary_bytes` bounds Core-owned converted images, crops, and input tensor buffers with checked arithmetic. ONNX Runtime's internal allocator/workspace is controlled by the pinned backend but is not included in this preflight counter; repeated lifecycle RSS and platform memory reports cover that process-level behavior.
 - Text-line orientation `true` returns `unsupported_capability` for the Core bundle.
@@ -300,8 +326,10 @@ struct EngineInfo {
   ResourceLimits limits;
   std::uint32_t intra_op_threads = 1;
   std::uint32_t inter_op_threads = 1;
+  DetectionStrategy detection_strategy = DetectionStrategy::bounded;
+  std::uint32_t detection_max_side = 960;
   float default_recognition_score_threshold = 0;
-  std::uint32_t default_recognition_batch_size = 8;
+  std::uint32_t default_recognition_batch_size = 1;
 };
 
 }  // namespace light_ocr

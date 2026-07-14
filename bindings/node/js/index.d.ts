@@ -1,6 +1,12 @@
 /// <reference types="node" />
 
 export type PixelFormat = 'gray8' | 'rgb8' | 'bgr8' | 'rgba8';
+export type DetectionStrategy = 'bounded' | 'upstreamExact';
+
+export interface DetectionOptions {
+  readonly strategy?: DetectionStrategy;
+  readonly maxSide?: number;
+}
 
 export interface RawImage {
   readonly data: Uint8Array;
@@ -30,6 +36,7 @@ export interface CreateEngineOptions {
   readonly reducedLimits?: ResourceLimits;
   readonly queueCapacity?: number;
   readonly maxPendingInputBytes?: number;
+  readonly detection?: DetectionOptions;
 }
 
 export interface RecognizeOptions {
@@ -38,6 +45,7 @@ export interface RecognizeOptions {
   readonly includeDiagnostics?: boolean;
   readonly signal?: AbortSignal;
   readonly useTextlineOrientation?: boolean;
+  readonly detectionMaxSide?: number;
 }
 
 export interface Point { readonly x: number; readonly y: number }
@@ -49,11 +57,19 @@ export interface OcrLine {
 export type RejectionReason = 'below_score_threshold' | 'empty_decode';
 export interface RejectedLine { readonly line: OcrLine; readonly reason: RejectionReason }
 export interface DiagnosticWarning { readonly code: string; readonly message: string }
+export interface RecognitionBatchShape {
+  readonly batchSize: number;
+  readonly height: number;
+  readonly width: number;
+}
 export interface Diagnostics {
   readonly rejectedLines: readonly RejectedLine[];
   readonly warnings: readonly DiagnosticWarning[];
   readonly detectedCandidates: number;
   readonly acceptedBoxes: number;
+  readonly detectionInputWidth: number;
+  readonly detectionInputHeight: number;
+  readonly recognitionBatchShapes: readonly RecognitionBatchShape[];
 }
 export interface TimingUs {
   readonly total: number;
@@ -89,6 +105,8 @@ export interface EngineInfo {
   readonly limits: ResourceLimits & { readonly maxConcurrentCalls: 1 };
   readonly intraOpThreads: number;
   readonly interOpThreads: number;
+  readonly detectionStrategy: DetectionStrategy;
+  readonly detectionMaxSide: number;
   readonly defaultRecognitionScoreThreshold: number;
   readonly defaultRecognitionBatchSize: number;
   readonly adapter: {

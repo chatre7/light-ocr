@@ -20,6 +20,7 @@ from oracle import (
     db_postprocess,
     decode,
     detection_input,
+    effective_profile,
     load_raw_bytes,
     recognition_batches,
     session,
@@ -54,6 +55,7 @@ def benchmark(
     pixel_format: str,
     warmup: int,
     iterations: int,
+    profile: str = "runtime_default",
 ) -> dict[str, Any]:
     load_begin = time.perf_counter_ns()
     manifest = json.loads((bundle / "manifest.json").read_text("utf-8"))
@@ -61,6 +63,9 @@ def benchmark(
     characters = json.loads(
         (bundle / config["recognition"]["decode"]["dictionaryPath"]).read_text("utf-8")
     )["characters"]
+    resize, detection_strategy, detection_max_side, recognition_batch_size = (
+        effective_profile(config, profile)
+    )
     raw_pixels = pixels.read_bytes()
     model_bundle_bytes = sum(path.stat().st_size for path in bundle.rglob("*") if path.is_file())
     load_end = time.perf_counter_ns()
@@ -93,7 +98,13 @@ def benchmark(
         timings = [elapsed_us(stage_begin, stage_end)]
 
         stage_begin = stage_end
-        det_input = detection_input(image, config["detection"])
+        det_input = detection_input(
+            image,
+            config["detection"],
+            resize,
+            detection_strategy,
+            detection_max_side,
+        )
         stage_end = time.perf_counter_ns()
         timings.append(elapsed_us(stage_begin, stage_end))
 
@@ -118,7 +129,9 @@ def benchmark(
         timings.append(elapsed_us(stage_begin, stage_end))
 
         stage_begin = stage_end
-        batches = recognition_batches(crops, config["recognition"])
+        batches = recognition_batches(
+            crops, config["recognition"], recognition_batch_size
+        )
         stage_end = time.perf_counter_ns()
         timings.append(elapsed_us(stage_begin, stage_end))
 
@@ -172,6 +185,7 @@ def benchmark(
         "backend": "python-oracle",
         "modelBundleId": manifest["bundleId"],
         "modelBundleBytes": model_bundle_bytes,
+        "profile": profile,
         "loadUs": elapsed_us(load_begin, load_end),
         "engineInitializationUs": elapsed_us(initialize_begin, initialize_end),
         "warmup": warmup,
@@ -199,6 +213,11 @@ def main() -> int:
     parser.add_argument("--format", choices=["gray8", "rgb8", "bgr8", "rgba8"], required=True)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--iterations", type=int, default=30)
+    parser.add_argument(
+        "--profile",
+        choices=["runtime_default", "bounded_default", "upstream_exact"],
+        default="runtime_default",
+    )
     arguments = parser.parse_args()
     report = benchmark(
         arguments.bundle,
@@ -209,6 +228,7 @@ def main() -> int:
         arguments.format,
         arguments.warmup,
         arguments.iterations,
+        arguments.profile,
     )
     print(json.dumps(report, sort_keys=True, separators=(",", ":")))
     return 0

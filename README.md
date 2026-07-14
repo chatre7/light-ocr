@@ -39,6 +39,7 @@ Node.js 适配器的本地构建、调用和测试见 [bindings/node/README.md](
 - [需求](docs/requirements.md)
 - [实施与验收状态](docs/implementation-status.md)
 - [架构](docs/architecture.md)
+- [高分辨率内存优化](docs/memory-optimization.md)
 - [C++ API](docs/native-api.md)
 - [Node-API 使用与构建](bindings/node/README.md)
 - [Node-API 设计](docs/napi-design.md)

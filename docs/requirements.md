@@ -162,6 +162,8 @@ Detection behavior MUST be driven by normalized bundle configuration covering:
 
 Unsupported or unknown values return `invalid_model_bundle`; stage code MUST NOT invent fallback values.
 
+The product runtime default MUST use the `bounded` strategy from [memory-optimization.md](memory-optimization.md): preserve aspect ratio, raise a short side below `64`, limit the longest detection side to `960`, then align both dimensions upward to a 32-pixel multiple. The official `64/min/4000` values remain source provenance and the explicit `upstream_exact` profile; `4,000` is a hard ceiling, not the product default.
+
 ### 7.2 Box processing and crop
 
 The library MUST:
@@ -183,7 +185,8 @@ Recognition MUST:
 - Treat the configuration dictionary, blank index, and appended-space rule as one immutable decode contract.
 - Support dynamic crop widths up to the bundle limit.
 - Sort crops for efficient batching without changing result order.
-- Support a bounded configurable batch size.
+- Use an effective default batch size of `1` and support an explicit bounded batch size up to `8`.
+- Construct, infer, decode, and release one recognition batch at a time; total crop count MUST NOT cause all crop tensors or all recognition inputs to remain live together.
 - Match oracle padding, normalization, CTC blank removal, duplicate removal, and confidence calculation.
 - Return valid UTF-8.
 - Preserve all characters supported by the pinned dictionary.
@@ -332,21 +335,23 @@ C++ exceptions MUST be caught and mapped before crossing the public library boun
 - Request memory is request-scoped or comes from a bounded reusable pool.
 - No request changes process-global thread settings.
 
-The default bundle declares initial limits:
+The default bundle declares product defaults and hard ceilings:
 
-| Limit | Default |
-| --- | ---: |
-| Maximum width | 10,000 pixels |
-| Maximum height | 10,000 pixels |
-| Maximum total pixels | 40,000,000 |
-| Detection maximum side after resize | 4,000 pixels |
-| Detection candidates | 3,000 |
-| Recognition batch size | 8 |
-| Recognition tensor width | 3,200 pixels |
-| Temporary request memory | 512 MiB |
-| Concurrent calls per engine | 1 |
+| Resource | Value | Role |
+| --- | ---: | --- |
+| Maximum width | 10,000 pixels | Hard ceiling |
+| Maximum height | 10,000 pixels | Hard ceiling |
+| Maximum total pixels | 40,000,000 | Hard ceiling |
+| Default detection longest side | 960 pixels | Runtime default |
+| Detection maximum side after resize | 4,000 pixels | Hard ceiling / `upstream_exact` |
+| Detection candidates | 3,000 | Hard ceiling |
+| Default recognition batch size | 1 | Runtime default |
+| Maximum recognition batch size | 8 | Hard ceiling |
+| Recognition tensor width | 3,200 pixels | Hard ceiling |
+| Temporary Core-owned request memory | 512 MiB | Hard ceiling |
+| Concurrent calls per engine | 1 | Hard ceiling |
 
-Engine options MAY reduce these limits. Increasing a bundle safety limit is rejected.
+Engine options MAY reduce hard ceilings. An engine MAY explicitly select a recognition batch from `1` through `8`, a bounded detection side up to the `4,000` hard ceiling, or `upstream_exact`; a request can only lower the engine's bounded side and cannot switch strategy. Changing an effective runtime default does not change the bundle hard ceiling. Increasing a bundle hard ceiling is rejected.
 
 ## 12. Runtime and dependencies
 
@@ -439,6 +444,8 @@ Initial gates are:
 - Model and session initialization once per engine.
 - No unbounded memory growth.
 
+The absolute high-resolution RSS gates, measurement method, and per-platform regression policy in [memory-optimization.md](memory-optimization.md) are release requirements. Relative latency alone cannot pass an implementation whose absolute peak exceeds those gates.
+
 These relative gates do not establish model accuracy. D002 fixes the first model selection, so its mandatory ground-truth report establishes the project baseline rather than applying an invented retrospective threshold. A later bundle must satisfy the no-regression policy in `parity-testing.md` or carry an approved product decision.
 
 ## 17. Testing and safety
@@ -480,6 +487,7 @@ The milestone is complete only when:
 - [ ] Stage-level and final-result parity gates pass.
 - [ ] The ground-truth model-quality report is complete and establishes the first-bundle baseline.
 - [ ] Performance gates pass on the declared reference environment.
+- [ ] Default bounded detection, streaming recognition, and absolute high-resolution memory gates pass on every Tier 1 platform.
 - [ ] Sanitizer, fuzz, leak, lifecycle, and malformed-input gates pass.
 - [ ] Runtime operation has no network, shell, current-directory, or locale dependency.
 - [ ] Build manifests, hashes, licenses, SBOM, parity report, and benchmark report are produced.
@@ -492,7 +500,8 @@ The milestone is complete only when:
 3. [model-bundle.md](model-bundle.md): exact artifacts, schema, normalized configuration, integrity, and licensing.
 4. [parity-testing.md](parity-testing.md): oracle, corpus, checkpoints, tolerances, and reports.
 5. [build-and-release.md](build-and-release.md): build graph, platform matrix, dependencies, CI, and milestone artifacts.
-6. [decisions.md](decisions.md): resolved choices and deliberately deferred decisions.
+6. [memory-optimization.md](memory-optimization.md): high-resolution resize policy, streaming recognition, absolute memory gates, and rollout plan.
+7. [decisions.md](decisions.md): resolved choices and deliberately deferred decisions.
 
 Each fact has one authoritative home. Companion documents reference this file and do not redefine product scope or acceptance gates.
 

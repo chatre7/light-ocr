@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -19,6 +20,12 @@ struct Arguments {
   std::uint32_t warmup = 2;
   std::uint32_t iterations = 10;
   std::filesystem::path report;
+  std::string profile;
+  std::uint32_t target_width = 0;
+  std::uint32_t target_height = 0;
+  std::uint64_t maximum_peak_bytes = 0;
+  std::uint32_t minimum_boxes = 0;
+  std::optional<std::uint32_t> maximum_boxes;
   bool diagnostics = false;
 };
 
@@ -53,15 +60,29 @@ inline Arguments parse_arguments(int argc, char** argv, bool benchmark) {
     else if (option == "--height") result.height = static_cast<std::uint32_t>(parse_unsigned(value, "height"));
     else if (option == "--stride") result.stride = static_cast<std::size_t>(parse_unsigned(value, "stride"));
     else if (option == "--format") result.format = parse_format(value);
+    else if (option == "--profile") result.profile = value;
     else if (benchmark && option == "--warmup") result.warmup = static_cast<std::uint32_t>(parse_unsigned(value, "warmup"));
     else if (benchmark && option == "--iterations") result.iterations = static_cast<std::uint32_t>(parse_unsigned(value, "iterations"));
     else if (benchmark && option == "--report") result.report = value;
+    else if (benchmark && option == "--target-width") result.target_width = static_cast<std::uint32_t>(parse_unsigned(value, "target-width"));
+    else if (benchmark && option == "--target-height") result.target_height = static_cast<std::uint32_t>(parse_unsigned(value, "target-height"));
+    else if (benchmark && option == "--maximum-peak-bytes") result.maximum_peak_bytes = parse_unsigned(value, "maximum-peak-bytes");
+    else if (benchmark && option == "--minimum-boxes") result.minimum_boxes = static_cast<std::uint32_t>(parse_unsigned(value, "minimum-boxes"));
+    else if (benchmark && option == "--maximum-boxes") result.maximum_boxes = static_cast<std::uint32_t>(parse_unsigned(value, "maximum-boxes"));
     else throw std::runtime_error("unknown option: " + option);
   }
   if (result.bundle.empty() || result.pixels.empty() || result.width == 0 || result.height == 0 ||
       result.stride == 0 || (benchmark && result.iterations == 0)) {
     throw std::runtime_error(
         "required: --bundle DIR --pixels FILE --width N --height N --stride N --format FORMAT");
+  }
+  if (result.profile.empty()) {
+    result.profile = benchmark ? "runtime_default" : "upstream_exact";
+  }
+  if (result.profile != "upstream_exact" &&
+      result.profile != "bounded_default" && result.profile != "runtime_default") {
+    throw std::runtime_error(
+        "profile must be upstream_exact, bounded_default, or runtime_default");
   }
   return result;
 }
