@@ -46,6 +46,12 @@ Cloud OCR is convenient, but it introduces uploads, network availability, recurr
 - **Built for asynchronous hosts.** The Node-API adapter keeps inference away from the JavaScript thread, with bounded queues, cancellation, and explicit lifecycle control.
 - **Open and inspectable.** The project is Apache-2.0 licensed and tests real model behavior, high-resolution memory use, lifecycle safety, and output parity in CI.
 
+## Why PP-OCRv6 Small
+
+![Official PP-OCRv6 model and VLM accuracy comparison](docs/assets/ppocrv6-model-comparison.png)
+
+The npm package uses **PP-OCRv6 Small**. On PaddleOCR's in-house multi-scenario benchmark it reports **84.1 detection Hmean** and **81.3 weighted recognition accuracy**, while keeping the model practical for local applications. This chart and these accuracy scores come from the [official PP-OCRv6 evaluation](https://github.com/PaddlePaddle/PaddleOCR/blob/211989f046cc1878460f9e65574690c00a127a1a/docs/version3.x/algorithm/PP-OCRv6/PP-OCRv6.en.md); they are upstream quality results, not latency measurements made by this repository.
+
 ## What results look like
 
 For each detected line, light-ocr returns the recognized text, a confidence score, and its position in the original image:
@@ -68,6 +74,22 @@ For each detected line, light-ocr returns the recognized text, a confidence scor
 ```
 
 Coordinates are quadrilaterals rather than axis-aligned rectangles, so rotated and perspective text can be represented without discarding geometry.
+
+## Measured speed
+
+![The 800 by 180 HELLO 123 benchmark input](docs/assets/benchmark-generated-hello-123.png)
+
+For the exact `800×180` BGR input above, light-ocr recognized `HELLO 123` with confidence `0.9893`. The native C++ Release benchmark was run on an Apple M4 Max (16-core CPU, 128 GB RAM), macOS 26.5.1, ONNX Runtime CPU with one intra-op and one inter-op thread, using the default bounded/960 strategy and recognition batch size 1.
+
+| Measurement | Result |
+| --- | ---: |
+| Warm end-to-end median | **75.678 ms/image** (~13.2 images/s) |
+| Warm end-to-end P95 | **79.788 ms/image** |
+| Detection + recognition inference median | **74.125 ms/image** |
+| Model bundle load, once | 167.906 ms |
+| Engine initialization, once | 30.511 ms |
+
+The test uses 5 warm-up runs followed by 30 measured runs. It is a small, synthetic, single-line fixture; latency varies with hardware, input dimensions, text density, and line count. The benchmark contract and comparison with the pinned Python oracle are recorded in [Implementation status](docs/implementation-status.md#本机最终验证快照).
 
 ## Get started
 

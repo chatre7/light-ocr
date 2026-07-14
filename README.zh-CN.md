@@ -46,6 +46,12 @@
 - **适合异步宿主。**Node-API 适配器不会占用 JavaScript 主线程，并提供有界队列、取消和明确的生命周期控制。
 - **开放、可检查。**项目采用 Apache-2.0 协议，并在 CI 中验证真实模型行为、大图内存、生命周期安全和输出对齐。
 
+## 为什么选择 PP-OCRv6 Small
+
+![PP-OCRv6 模型与 VLM 官方准确率对比](docs/assets/ppocrv6-model-comparison.png)
+
+npm package 使用 **PP-OCRv6 Small**。在 PaddleOCR 的内部多场景基准中，它取得了 **84.1 的检测 Hmean** 和 **81.3 的识别加权准确率**，同时保持适合本地应用的模型规模。图表和准确率来自 [PP-OCRv6 官方评测](https://github.com/PaddlePaddle/PaddleOCR/blob/211989f046cc1878460f9e65574690c00a127a1a/docs/version3.x/algorithm/PP-OCRv6/PP-OCRv6.md)；这是上游质量结果，不是本项目测得的耗时。
+
 ## 返回结果是什么样的
 
 对于每一行检测到的文字，light-ocr 都会返回识别文本、置信度，以及它在原图中的位置：
@@ -68,6 +74,22 @@
 ```
 
 位置使用四边形而不是普通矩形，因此可以保留旋转文字和透视文字的几何信息。
+
+## 实测速度
+
+![800×180 的 HELLO 123 benchmark 输入图](docs/assets/benchmark-generated-hello-123.png)
+
+对于上面这张 `800×180` BGR 图片，light-ocr 识别结果为 `HELLO 123`，置信度 `0.9893`。原生 C++ Release benchmark 运行在 Apple M4 Max（16 核 CPU、128 GB 内存）、macOS 26.5.1、ONNX Runtime CPU 环境，intra-op 与 inter-op thread 均为 1，并使用默认 bounded/960 策略和 recognition batch size 1。
+
+| 指标 | 实测结果 |
+| --- | ---: |
+| 预热后端到端中位数 | **75.678 ms/张**（约 13.2 张/秒） |
+| 预热后端到端 P95 | **79.788 ms/张** |
+| 检测 + 识别纯推理中位数 | **74.125 ms/张** |
+| 模型 bundle 加载，仅一次 | 167.906 ms |
+| Engine 初始化，仅一次 | 30.511 ms |
+
+测试先预热 5 次，再测量 30 次。这是一张小尺寸、合成的单行图片；实际延迟会随硬件、图片尺寸、文字密度和文本行数变化。benchmark 契约及与固定 Python oracle 的对照见[实施状态](docs/implementation-status.md#本机最终验证快照)。
 
 ## 开始使用
 
