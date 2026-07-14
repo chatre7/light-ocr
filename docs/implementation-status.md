@@ -1,7 +1,7 @@
 # C++ Core 与 Node-API 实施状态
 
 更新时间：2026-07-14  
-结论：C++ Core 第一阶段高分辨率优化与 Node-API v1 已完成，`@arcships/light-ocr@0.1.0` 已公开发布。默认 bounded/960、batch 1 流式 recognition、schema 1.1 bundle、双 profile parity、四平台 Core CI、Node.js 22/24 八组 package matrix、registry 安装和禁网运行门槛均已通过。`tiled` 属于后续准确模式，不阻塞 `0.1.0`。
+结论：C++ Core 第一阶段高分辨率优化与 Node-API v1 已完成，`@arcships/light-ocr@0.1.0` 已公开发布。默认 bounded/960、batch 1 流式 recognition、schema 1.1 bundle、双 profile parity、四平台 Core CI、Node.js 22/24 八组 package matrix、registry 安装和禁网运行门槛均已通过。`tiled` 属于后续准确模式，不阻塞 `0.1.0`；其[技术设计与验收规格](tiled-design-and-acceptance.md)已形成 Draft，但实现、语料和四平台基线仍为 Pending。
 
 状态含义：
 
@@ -26,6 +26,7 @@
 | manifest、hash、licenses、SBOM、parity、benchmark | Done | Release commit 已重新生成并保存四平台 metadata、六个 npm tarballs 的 hashes/integrity、parity、quality 与 benchmark 证据。 |
 | N-API/npm 非本 Core milestone | Done / `0.1.0` published | raw Node-API v8、CJS/ESM、`.d.ts`、内置模型解析、四平台 prebuild、双重背压、AbortSignal 与生命周期均已完成；[npm release run 29312486301](https://github.com/arcships/light-ocr/actions/runs/29312486301) 的 Node 22/24 八组测试、registry 分阶段发布和禁网复验全绿。 |
 | 高分辨率峰值内存 | Done | Release 原生独立进程本机参考：2048² 空白 `318.8 MiB ≤ 384 MiB`；xfund 密集表单 116 框 `400.5 MiB ≤ 640 MiB`。四平台 release jobs 的真实模型与 RSS gates 均通过。 |
+| Tiled 高分辨率准确模式 | Pending / design drafted | 独立规格已固定 `tiled-v1` planner、merge、C++/Node additive API、八张 2048² ground-truth fixtures、四平台 peak/latency 和六包发布门槛；代码、corpus、baseline 尚未实现，不得声明已支持。 |
 
 ## 本机最终验证快照
 

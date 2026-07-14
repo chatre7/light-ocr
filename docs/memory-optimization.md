@@ -2,6 +2,8 @@
 
 状态：第一阶段已实现并通过四平台 release CI；`tiled` 第二阶段待完成
 
+Tiled authority：[Tiled Detection 技术设计与验收规格](tiled-design-and-acceptance.md)。本文保留背景与高层方案；分块算法、runtime contract、API、语料、四平台门槛和完成定义以独立规格为准。
+
 适用范围：C++ Core；Node-API 只映射 Core 策略，不重新实现 OCR 逻辑
 
 依据：PP-OCRv6 small、ONNX Runtime CPU、PaddleOCR v3.7.0 revision `b03f46425e8ff4442b268ce449e3eef758146cd4`
@@ -261,6 +263,8 @@ schema `1.1` 还明确记录 `minimumShortSide=64` 与 `dimensionMultipleRoundin
 
 ### 9.3 `tiled`
 
+本节仅保留质量方向；可执行 fixture matrix、merge 判定、oracle、报告与 hard gates 见 [Tiled Detection 技术设计与验收规格](tiled-design-and-acceptance.md)。
+
 - 新增文字跨水平边界、垂直边界、四 tile 交点和原图边缘的 fixtures。
 - 不得产生重复行。
 - 与 `upstream_exact` 对应结果的文字、顺序和置信度执行差异报告。
@@ -300,7 +304,7 @@ macOS arm64 首个实现门槛：
 4. **已完成**：增加 `DetectionStrategy`，实现默认 `bounded/960`，保留显式 `upstream_exact`。
 5. **已完成**：更新 normalized config schema、bundle ID/revision、C++/Node 类型和 `EngineInfo`。
 6. **已完成（本地）**：建立 `bounded_default` Python oracle 与独立 goldens，完成 quality/parity 回归。
-7. **待第二阶段**：实现 `tiled/1280/128`、全局 merge 和 tile-boundary corpus。
+7. **待第二阶段**：按 [独立 tiled 规格](tiled-design-and-acceptance.md) 实现 `tiled-v1`、全局 merge 和 tile-boundary corpus。
 8. 执行 ORT arena/memory-pattern/thread A/B，锁定最终 backend 选项。
 9. 在四个平台保存 absolute peak、steady RSS、latency 和 release baselines。
 
@@ -329,6 +333,8 @@ macOS arm64 首个实现门槛：
 - 文档、`EngineInfo`、C++ API、Node types 和实际代码一致。
 
 公开 `tiled` 还必须满足：
+
+以下四项的精确定义与逐项 checklist 见 [Tiled Detection 技术设计与验收规格 §14](tiled-design-and-acceptance.md#14-完成定义)。
 
 - 2048 small-text、dense、水平/垂直边界、四 tile 交点和原图边缘 ground truth 通过；
 - 合并后没有重复行，reading order 稳定；

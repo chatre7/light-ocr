@@ -5,7 +5,7 @@ Authority: public C++ source contract, ownership, lifecycle, errors, and compati
 Requirements: [requirements.md](requirements.md)  
 Architecture: [architecture.md](architecture.md)
 
-The declarations below include the implemented bounded-detection and streaming-recognition contract. The deferred tiled mode is specified separately in [memory-optimization.md](memory-optimization.md).
+The declarations below include the implemented bounded-detection and streaming-recognition contract. The deferred tiled mode is specified in the draft [Tiled Detection design and acceptance specification](tiled-design-and-acceptance.md); its memory background remains in [memory-optimization.md](memory-optimization.md). Proposed tiled declarations are not part of Core 0.1.0.
 
 ## 1. Scope
 

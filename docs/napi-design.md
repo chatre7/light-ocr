@@ -6,6 +6,8 @@ Authority：JavaScript/TypeScript API、异步调度、内存所有权、Node.js
 Core contract：[native-api.md](native-api.md)  
 Decision：[decisions.md](decisions.md) D101、D105
 
+后续 `DetectionStrategy: "tiled"` 的 additive Node types、diagnostics、runtime identity 与 lockstep 发布条件见 [Tiled Detection 技术设计与验收规格](tiled-design-and-acceptance.md)。该规格当前为 Draft，不属于已发布的 `0.1.0` API。
+
 ## 1. 结论
 
 第一版 Node.js 适配器是 C++ Core 的异步、无损映射：

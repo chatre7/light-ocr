@@ -7,6 +7,8 @@ Node API：[napi-design.md](napi-design.md)<br>
 Model contract：[model-bundle.md](model-bundle.md)<br>
 Decision：[decisions.md](decisions.md) D105
 
+未来首次包含 tiled detection 的 minor release 继续使用本文六包 lockstep 规则；额外的类型、bundle、四平台基线和发布门槛见 [Tiled Detection 技术设计与验收规格](tiled-design-and-acceptance.md)。该规格不改变已发布 `0.1.0` 的包内容。
+
 ## 1. 用户契约
 
 v1 的唯一推荐安装入口是：

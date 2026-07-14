@@ -165,6 +165,8 @@ Runtime code parses only `normalized-config.json`. This prevents YAML-parser dif
 
 The current normalized-config schema is `1.1`. It separates `sourceDetectionResize` (`64/min/4000` provenance), `runtimeDefaults.detection` (`bounded/960`), and `resourceLimits.maxDetectionSide` (`4000` ceiling). Core still accepts schema `1.0` bundles as the legacy `upstream_exact` / batch-8 contract; it never silently assigns new product defaults to an old bundle.
 
+The draft [Tiled Detection specification](tiled-design-and-acceptance.md) proposes normalized-config schema `1.2` and the versioned `tiled-v1` runtime profile for a future lockstep minor release. Until its completion checklist passes, schema `1.1` remains the current published contract and bundles must not advertise tiled capability.
+
 The same file also fixes the bundle ceilings:
 
 ```json
