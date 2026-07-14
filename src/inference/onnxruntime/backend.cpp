@@ -156,9 +156,9 @@ Result<TensorOutput> OnnxSession::run(const std::vector<float>& values,
                                            "Inference output is not float32");
     }
     const auto count = info.GetElementCount();
-    auto shape = info.GetShape();
+    auto output_shape = info.GetShape();
     return Result<TensorOutput>::success(
-        TensorOutput(std::move(outputs[0]), std::move(shape), count));
+        TensorOutput(std::move(outputs[0]), std::move(output_shape), count));
   } catch (const Ort::Exception& exception) {
     return runtime_failure<TensorOutput>(ErrorCode::inference_failed,
                                          "ONNX Runtime inference failed", exception.what());
