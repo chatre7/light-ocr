@@ -8,10 +8,15 @@ on:
         required: true
         default: 0.2.0
         type: string
+      publish_to_registry:
+        description: Publish the fully gated candidate to npm after preflight
+        required: true
+        default: false
+        type: boolean
       promote_latest:
         description: Promote the verified release from next to latest
         required: true
-        default: true
+        default: false
         type: boolean
 
 permissions:
@@ -25,6 +30,7 @@ jobs:
   validate:
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Validate release context
         shell: bash
         env:
@@ -32,6 +38,11 @@ jobs:
         run: |
           test "${GITHUB_REF}" = "refs/heads/main"
           [[ "${RELEASE_VERSION}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          source_version="$(python -c 'import json; print(json.load(open("bindings/node/package.json", encoding="utf-8"))["version"])')"
+          test "$RELEASE_VERSION" = "$source_version"
+          if [[ "${{ inputs.publish_to_registry }}" == "true" ]]; then
+            test -f contracts/tiled-platform-baselines.json
+          fi
 
   build-native:
     needs: validate
@@ -42,18 +53,27 @@ jobs:
         include:
           - id: macos-arm64
             runner: macos-15
+            executable_suffix: ""
           - id: macos-x64
             runner: macos-15-intel
+            executable_suffix: ""
           - id: linux-x64
             runner: ubuntu-24.04
+            executable_suffix: ""
           - id: windows-x64
             runner: windows-2022
+            executable_suffix: ".exe"
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - name: Install the hash-locked oracle
+        run: python -m pip install --require-hashes -r oracle/requirements.lock
       - name: Bootstrap pinned dependencies and model
         shell: bash
         run: |
@@ -97,7 +117,9 @@ jobs:
           -DLIGHT_OCR_DEPENDENCY_CACHE_DIR="$PWD/.cache/dependencies"
           -DLIGHT_OCR_BUILD_NODE=ON
           -DLIGHT_OCR_BUILD_TESTS=ON
-          -DLIGHT_OCR_BUILD_TOOLS=OFF
+          -DLIGHT_OCR_BUILD_TOOLS=ON
+          -DLIGHT_OCR_ORACLE_PYTHON="$(command -v python)"
+          -DLIGHT_OCR_PARITY_LIVE_ORACLE=ON
           -DLIGHT_OCR_NODE_INCLUDE_DIR="$NODE_INCLUDE_DIR"
           -DLIGHT_OCR_NODE_EXECUTABLE="$(command -v node)"
       - name: Configure Node addon (Windows)
@@ -108,22 +130,75 @@ jobs:
           "-DLIGHT_OCR_DEPENDENCY_CACHE_DIR=$env:GITHUB_WORKSPACE/.cache/dependencies"
           -DLIGHT_OCR_BUILD_NODE=ON
           -DLIGHT_OCR_BUILD_TESTS=ON
-          -DLIGHT_OCR_BUILD_TOOLS=OFF
+          -DLIGHT_OCR_BUILD_TOOLS=ON
+          "-DLIGHT_OCR_ORACLE_PYTHON=$((Get-Command python).Source)"
+          -DLIGHT_OCR_PARITY_LIVE_ORACLE=ON
           "-DLIGHT_OCR_NODE_INCLUDE_DIR=$env:NODE_INCLUDE_DIR"
           "-DLIGHT_OCR_NODE_LIBRARY=$env:NODE_LIBRARY"
           "-DLIGHT_OCR_NODE_EXECUTABLE=$((Get-Command node).Source)"
       - name: Build and test Node addon
         run: |
           cmake --build build-npm --config Release --parallel
-          ctest --test-dir build-npm -C Release --output-on-failure
-      - name: Generate native release metadata
+          ctest --test-dir build-npm -C Release --output-on-failure -LE "acceptance|canonical-oracle"
+      - name: Generate native build identity
+        shell: bash
+        run: >-
+          python tools/generate_release_metadata.py
+          --build-dir build-npm
+          --output-dir "reports/npm/${{ matrix.id }}"
+          --platform-id "${{ matrix.id }}"
+          --configuration Release
+      - name: Run the locked tiled corpus and independent oracle
+        if: matrix.id == 'linux-x64'
         shell: bash
         run: |
-          python tools/generate_release_metadata.py \
-            --build-dir build-npm \
-            --output-dir "reports/npm/${{ matrix.id }}" \
-            --platform-id "${{ matrix.id }}" \
-            --configuration Release
+          ctest --test-dir build-npm -C Release --output-on-failure -L acceptance
+          python oracle/run_tiled_quality.py \
+            --native-validate build-npm/bin/light_ocr_validate${{ matrix.executable_suffix }} \
+            --bundle models/generated/ppocrv6-small-onnx-20260714.2 \
+            --repetitions 10 \
+            --report reports/tiled-quality/quality-10-runs.json
+      - name: Characterize tiled Core latency and absolute peak
+        shell: bash
+        run: |
+          for fixture in \
+            tiled-small-text-2048 \
+            tiled-dense-2048 \
+            tiled-four-way-intersection-2048; do
+            fixture_dir="corpus/tiled-v1/fixtures/$fixture"
+            minimum_boxes="$(python -c 'import json,sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))["annotations"]))' "$fixture_dir/fixture.json")"
+            mkdir -p \
+              "reports/tiled-candidate/${{ matrix.id }}/core" \
+              "reports/tiled-candidate/${{ matrix.id }}/core-memory"
+            python oracle/run_tiled_benchmark.py \
+              --native-benchmark build-npm/bin/light_ocr_benchmark${{ matrix.executable_suffix }} \
+              --bundle models/generated/ppocrv6-small-onnx-20260714.2 \
+              --fixture "$fixture_dir/fixture.json" \
+              --platform-id "${{ matrix.id }}" \
+              --build-metadata "reports/npm/${{ matrix.id }}/build-manifest.json" \
+              --warmup 5 --iterations 10 \
+              --report "reports/tiled-candidate/${{ matrix.id }}/core/$fixture.json"
+            for diagnostics in on off; do
+              build-npm/bin/light_ocr_memory_gate${{ matrix.executable_suffix }} \
+                --bundle models/generated/ppocrv6-small-onnx-20260714.2 \
+                --pixels "$fixture_dir/pixels.bin" \
+                --width 2048 --height 2048 --stride 6144 --format bgr8 \
+                --target-width 2048 --target-height 2048 --profile tiled_v1 \
+                --diagnostics-mode "$diagnostics" \
+                --maximum-peak-bytes 1073741824 \
+                --minimum-boxes "$minimum_boxes" \
+                --report "reports/tiled-candidate/${{ matrix.id }}/core-memory/$fixture-$diagnostics.json"
+            done
+          done
+          build-npm/bin/light_ocr_leak_check${{ matrix.executable_suffix }} \
+            --bundle models/generated/ppocrv6-small-onnx-20260714.2 \
+            --pixels corpus/tiled-v1/fixtures/tiled-four-way-intersection-2048/pixels.bin \
+            --width 2048 --height 2048 --stride 6144 --format bgr8 \
+            --profile tiled_v1 --warmup 5 --iterations 10 \
+            --report "reports/tiled-candidate/${{ matrix.id }}/core-lifecycle.json"
+      - name: Stage native release input
+        shell: bash
+        run: |
           python tools/npm_release.py stage-native \
             --platform-id "${{ matrix.id }}" \
             --build-dir build-npm \
@@ -135,6 +210,21 @@ jobs:
           path: dist/native-input/${{ matrix.id }}
           if-no-files-found: error
           retention-days: 30
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tiled-core-${{ matrix.id }}
+          path: reports/tiled-candidate/${{ matrix.id }}
+          if-no-files-found: error
+          retention-days: 90
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: matrix.id == 'linux-x64'
+        with:
+          name: tiled-quality
+          path: |
+            reports/tiled-quality
+            build-npm/reports/tiled
+          if-no-files-found: error
+          retention-days: 90
 
   assemble:
     needs: build-native
@@ -239,7 +329,7 @@ jobs:
             "../dist/release/arcships-light-ocr-model-ppocrv6-small-${RELEASE_VERSION}.tgz" \
             "../dist/release/arcships-light-ocr-${{ matrix.native }}-${RELEASE_VERSION}.tgz" \
             "../dist/release/arcships-light-ocr-${RELEASE_VERSION}.tgz"
-          cp ../tools/npm/smoke.cjs ../tools/npm/smoke.ts .
+          cp ../tools/npm/smoke.cjs ../tools/npm/smoke.ts ../tools/npm/tiled-benchmark.cjs .
           npm ls --all
       - name: Run real OCR from CJS and ESM
         shell: bash
@@ -247,6 +337,25 @@ jobs:
         env:
           LIGHT_OCR_SMOKE_FIXTURE: ${{ github.workspace }}/corpus/fixtures/generated-hello-123
         run: node smoke.cjs
+      - name: Characterize the installed tiled package
+        shell: bash
+        working-directory: package-smoke
+        run: |
+          report_dir="$GITHUB_WORKSPACE/reports/tiled-candidate/${{ matrix.id }}/node${{ matrix.node }}"
+          mkdir -p "$report_dir"
+          for fixture in \
+            tiled-small-text-2048 \
+            tiled-dense-2048 \
+            tiled-four-way-intersection-2048; do
+            for diagnostics in on off; do
+              node tiled-benchmark.cjs \
+                --fixture "$GITHUB_WORKSPACE/corpus/tiled-v1/fixtures/$fixture" \
+                --platform-id "${{ matrix.id }}" \
+                --diagnostics "$diagnostics" \
+                --warmup 5 --iterations 10 \
+                --report "$report_dir/$fixture-$diagnostics.json"
+            done
+          done
       - name: Compile the published TypeScript declarations
         shell: bash
         working-directory: package-smoke
@@ -256,9 +365,136 @@ jobs:
           npx tsc --strict --noEmit --skipLibCheck false \
             --target ES2022 --module NodeNext --moduleResolution NodeNext \
             --types node smoke.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tiled-node-${{ matrix.id }}-${{ matrix.node }}
+          path: reports/tiled-candidate/${{ matrix.id }}/node${{ matrix.node }}
+          if-no-files-found: error
+          retention-days: 90
+
+  local-registry:
+    needs: assemble
+    runs-on: ubuntu-24.04
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      LOCAL_REGISTRY: http://127.0.0.1:4873
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: light-ocr-npm-${{ inputs.version }}
+          path: dist/release
+      - name: Publish all six tarballs to an isolated registry
+        shell: bash
+        run: |
+          npm install --global npm@11.0.0 verdaccio@6.8.0
+          mkdir -p .cache/verdaccio
+          cp tools/npm/verdaccio-release.yaml .cache/verdaccio/config.yaml
+          verdaccio --config .cache/verdaccio/config.yaml > .cache/verdaccio/server.log 2>&1 &
+          echo "$!" > .cache/verdaccio/server.pid
+          for attempt in {1..30}; do
+            if curl --fail --silent "$LOCAL_REGISTRY/-/ping" > /dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent "$LOCAL_REGISTRY/-/ping"
+          response="$(curl --fail --silent --request PUT \
+            "$LOCAL_REGISTRY/-/user/org.couchdb.user:release" \
+            --header 'content-type: application/json' \
+            --data '{"name":"release","password":"release-password","email":"release@example.com","type":"user","roles":[],"date":"2026-07-14T00:00:00.000Z"}')"
+          token="$(python -c 'import json,sys; print(json.load(sys.stdin)["token"])' <<< "$response")"
+          printf '//127.0.0.1:4873/:_authToken=%s\n' "$token" \
+            > .cache/verdaccio/npmrc
+          echo "NPM_CONFIG_USERCONFIG=$PWD/.cache/verdaccio/npmrc" >> "$GITHUB_ENV"
+          for tarball in dist/release/*.tgz; do
+            NPM_CONFIG_USERCONFIG="$PWD/.cache/verdaccio/npmrc" \
+              npm publish "$tarball" --registry "$LOCAL_REGISTRY" \
+              --access public --provenance=false
+          done
+      - name: Install only the facade and run offline after registry shutdown
+        shell: bash
+        run: |
+          mkdir registry-smoke
+          cd registry-smoke
+          npm init --yes
+          npm install --ignore-scripts --no-audit --no-fund --package-lock=false \
+            --registry "$LOCAL_REGISTRY" "@arcships/light-ocr@${RELEASE_VERSION}"
+          cp ../tools/npm/smoke.cjs ../tools/npm/tiled-benchmark.cjs .
+          kill "$(cat ../.cache/verdaccio/server.pid)"
+          wait "$(cat ../.cache/verdaccio/server.pid)" || true
+          LIGHT_OCR_SMOKE_FIXTURE="$GITHUB_WORKSPACE/corpus/fixtures/generated-hello-123" \
+            node smoke.cjs
+          node tiled-benchmark.cjs \
+            --fixture "$GITHUB_WORKSPACE/corpus/tiled-v1/fixtures/tiled-four-way-intersection-2048" \
+            --platform-id linux-x64 --diagnostics on --warmup 5 --iterations 10 \
+            --report "$GITHUB_WORKSPACE/reports/local-registry-tiled.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: local-registry-evidence
+          path: |
+            .cache/verdaccio/server.log
+            reports/local-registry-tiled.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  aggregate:
+    needs: [test-packages, local-registry]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: tiled-core-*
+          path: downloaded/core
+          merge-multiple: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: tiled-node-*
+          path: downloaded/node
+          merge-multiple: false
+      - name: Rebuild the four-platform evidence tree
+        shell: bash
+        run: |
+          for platform in linux-x64 windows-x64 macos-arm64 macos-x64; do
+            destination="reports/tiled-candidate/$platform"
+            mkdir -p "$destination"
+            cp -R "downloaded/core/tiled-core-$platform"/. "$destination/"
+            for node in 22 24; do
+              mkdir -p "$destination/node$node"
+              cp -R "downloaded/node/tiled-node-$platform-$node"/. "$destination/node$node/"
+            done
+          done
+      - name: Validate the complete matrix and regression limits
+        shell: bash
+        run: |
+          arguments=(
+            collect
+            --reports-root reports/tiled-candidate
+            --git-commit "$GITHUB_SHA"
+            --output reports/tiled-platform-baselines.candidate.json
+          )
+          if [[ -f contracts/tiled-platform-baselines.json ]]; then
+            arguments+=(--accepted contracts/tiled-platform-baselines.json)
+          elif [[ "${{ inputs.publish_to_registry }}" == "true" ]]; then
+            echo 'An accepted four-platform baseline is required before npm publish.' >&2
+            exit 1
+          fi
+          python tools/tiled_release_gate.py "${arguments[@]}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tiled-release-candidate-${{ github.sha }}
+          path: |
+            reports/tiled-platform-baselines.candidate.json
+            reports/tiled-candidate
+          if-no-files-found: error
+          retention-days: 90
 
   publish:
-    needs: test-packages
+    needs: aggregate
+    if: inputs.publish_to_registry
     runs-on: ubuntu-24.04
     environment: npm-release
     permissions:

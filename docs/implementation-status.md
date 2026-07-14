@@ -1,7 +1,7 @@
 # C++ Core 与 Node-API 实施状态
 
 更新时间：2026-07-14  
-结论：已发布的 `@arcships/light-ocr@0.1.0` 及其 bounded/960 行为不变。当前源码正在实现下一次 minor release 的 `tiled-v1`：schema 1.2 bundle、C++ pipeline、确定性 merge、诊断、Node runtime/类型和 0.2.0 package staging 已完成本机实现与测试；八张独立 ground truth、Python tiled oracle、四平台受审 peak/latency baseline 和 registry release evidence 仍未完成，因此 README 与 npm `latest` 不能宣称 tiled 已支持。
+结论：已发布的 `@arcships/light-ocr@0.1.0` 及其 bounded/960 行为不变。当前源码正在准备下一次 minor release 的 `tiled-v1`：schema 1.2 bundle、C++/Node pipeline、八张独立 ground truth、Python tiled oracle、确定性/质量门禁和无 token 发布预检均已完成本机实现与测试；四平台受审 peak/latency baseline 和 0.2.0 registry release evidence 仍未产生，因此 README 与 npm `latest` 不能宣称 tiled 已支持。
 
 状态含义：
 
@@ -26,7 +26,7 @@
 | manifest、hash、licenses、SBOM、parity、benchmark | Done | Release commit 已重新生成并保存四平台 metadata、六个 npm tarballs 的 hashes/integrity、parity、quality 与 benchmark 证据。 |
 | N-API/npm 非本 Core milestone | Done / `0.1.0` published | raw Node-API v8、CJS/ESM、`.d.ts`、内置模型解析、四平台 prebuild、双重背压、AbortSignal 与生命周期均已完成；[npm release run 29312486301](https://github.com/arcships/light-ocr/actions/runs/29312486301) 的 Node 22/24 八组测试、registry 分阶段发布和禁网复验全绿。 |
 | 高分辨率峰值内存 | Done | Release 原生独立进程本机参考：2048² 空白 `318.8 MiB ≤ 384 MiB`；xfund 密集表单 116 框 `400.5 MiB ≤ 640 MiB`。四平台 release jobs 的真实模型与 RSS gates 均通过。 |
-| Tiled 高分辨率准确模式 | In progress / Core + Node implemented locally | 1280 tile、2048→4-pass row-major、全局 candidate ceiling、IoU/IOS greedy merge、原图 recognition、C++/Node contract、CLI memory/latency 与真实 package smoke 已实现；八张 corpus、独立 oracle、四平台 accepted baseline 和 0.2.0 发布仍是硬缺口。 |
+| Tiled 高分辨率准确模式 | Release candidate / not published | 1280 tile、2048→4-pass row-major、全局 candidate ceiling、IoU/IOS greedy merge、原图 recognition、C++/Node contract、8-fixture/196-line corpus、独立 oracle、Core/Node memory/latency 与 package smoke 已实现；四平台 accepted baseline 和 0.2.0 发布仍是硬缺口。 |
 
 ## 本机最终验证快照
 
@@ -34,7 +34,7 @@
 
 | 验证 | 结果 |
 | --- | --- |
-| Release CTest | 18/18 passed；包括 unit、integration、双 profile golden/parity、quality，以及 bounded 与 tiled 原生 memory gate |
+| Release acceptance CTest | 15/15 passed；包括旧双 profile golden/parity/quality、八图 tiled lock/parity/quality，以及 bounded/tiled 原生 memory gate |
 | 全阶段语料 | `upstream_exact` 14/14；`bounded_default` 14/14 |
 | 质量基线 | bounded 10/10 exact；0/104 CER；10 TP / 0 FP / 0 FN，detection P/R/Hmean = 1.0（IoU≥0.5） |
 | ASan + UBSan | 2/2 passed；Apple 平台不启用 LSan |
@@ -44,8 +44,8 @@
 | offline contract | sterile cwd/minimal locale environment passed |
 | model archive | 已发布 `.1`：31,334,400 bytes / `74e246bf…de17`；tiled candidate `.2`：31,334,400 bytes / `e543b93b…712f` |
 | Node-API v1 | Node.js 22.13.0；macOS arm64 Release/Werror 构建；CTest 3/3；bounded/exact 映射、真实 PP-OCRv6 API、snapshot/byteOffset、校验、symlink root、双重背压、abort、heartbeat、close/worker teardown 测试通过 |
-| Tiled candidate | Core unit/integration、Node adapter 与 2048 blank/dense memory gate 通过；2048 boundary `HELLO 123` 由 4 个 raw boxes 确定性合并为 1 行；side override、tile ceiling、global candidate ceiling 均返回稳定错误 |
-| Tiled candidate RSS（本机探索值） | macOS arm64：2048² blank 676,397,056 bytes；dense 740,982,784 bytes；均低于 1 GiB release gate，尚不是四平台 accepted baseline |
+| Tiled candidate | 八张 2048² locked fixtures 共 196 行：196 TP / 0 FP / 0 FN、CER 0、duplicate line 0；独立 oracle 与原生 pass tensor、candidate source、suppression、representative、crop、decode 和 final order 对齐；side override、tile ceiling、global candidate ceiling 均返回稳定错误 |
+| Tiled candidate（本机探索值） | macOS arm64 四 tile 交点：Core median 2.28 s / peak 683,147,264 bytes，Node 22 median 2.29 s / peak 742,129,664 bytes；Core-vs-oracle 与 Node-vs-Core 均通过，尚不是四平台 accepted baseline |
 
 性能报告（5 warmup + 30 iterations，`generated-hello-123`）：
 
@@ -61,4 +61,4 @@
 
 `0.1.0` 的四平台 Core、Node.js 22/24 prebuild、六包确定性制品、public registry、provenance、默认 `createEngine()` 与禁网运行证据已经完成，详见 [npm 0.1.0 发布记录](releases/npm-0.1.0.md)。
 
-当前下一优先级是完成 tiled 八张 locked fixtures、独立 Python stage oracle、四平台 Core/Node 报告与 baseline review，再运行六包 local-registry/offline/release evidence 链。完成定义全绿前不发布 0.2.0，也不改变 0.1.0 的公开结论。
+当前下一优先级是运行一次 `publish_to_registry=false` 的四平台 release preflight，review 并提交 `contracts/tiled-platform-baselines.json`，然后在同一源码身份上重跑完整门禁并发布到 `next`。完成定义全绿前不发布 0.2.0，也不改变 0.1.0 的公开结论。

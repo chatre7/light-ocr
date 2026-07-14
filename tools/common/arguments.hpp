@@ -27,6 +27,7 @@ struct Arguments {
   std::uint32_t minimum_boxes = 0;
   std::optional<std::uint32_t> maximum_boxes;
   bool diagnostics = false;
+  std::string diagnostics_mode = "on";
 };
 
 inline std::uint64_t parse_unsigned(const std::string& value, const char* name) {
@@ -72,6 +73,7 @@ inline Arguments parse_arguments(int argc, char** argv, bool benchmark) {
     else if (option == "--stride") result.stride = static_cast<std::size_t>(parse_unsigned(value, "stride"));
     else if (option == "--format") result.format = parse_format(value);
     else if (option == "--profile") result.profile = value;
+    else if (benchmark && option == "--diagnostics-mode") result.diagnostics_mode = value;
     else if (benchmark && option == "--warmup") result.warmup = static_cast<std::uint32_t>(parse_unsigned(value, "warmup"));
     else if (benchmark && option == "--iterations") result.iterations = static_cast<std::uint32_t>(parse_unsigned(value, "iterations"));
     else if (benchmark && option == "--report") result.report = value;
@@ -95,6 +97,9 @@ inline Arguments parse_arguments(int argc, char** argv, bool benchmark) {
       result.profile != "tiled_v1") {
     throw std::runtime_error(
         "profile must be upstream_exact, bounded_default, runtime_default, or tiled_v1");
+  }
+  if (result.diagnostics_mode != "on" && result.diagnostics_mode != "off") {
+    throw std::runtime_error("diagnostics-mode must be on or off");
   }
   return result;
 }

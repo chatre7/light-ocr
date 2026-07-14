@@ -39,7 +39,15 @@ struct TiledCandidate {
 };
 
 struct TiledMergeResult {
+  struct Suppression {
+    std::uint32_t candidate_tile_ordinal = 0;
+    std::uint32_t candidate_ordinal = 0;
+    std::uint32_t representative_tile_ordinal = 0;
+    std::uint32_t representative_ordinal = 0;
+  };
+
   std::vector<TiledCandidate> representatives;
+  std::vector<Suppression> suppressions;
   std::uint32_t suppressed_duplicates = 0;
 };
 

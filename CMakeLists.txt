@@ -114,7 +114,8 @@ if(LIGHT_OCR_BUILD_TOOLS)
 
   add_executable(light_ocr_benchmark tools/benchmark/main.cpp tools/common/bundle_files.cpp)
   target_link_libraries(light_ocr_benchmark PRIVATE light_ocr::core nlohmann_json::nlohmann_json)
-  target_include_directories(light_ocr_benchmark PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tools)
+  target_include_directories(light_ocr_benchmark PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/tools)
   light_ocr_stage_onnxruntime(light_ocr_benchmark)
 
   add_executable(light_ocr_memory_gate tools/memory_gate/main.cpp
@@ -257,6 +258,14 @@ if(LIGHT_OCR_BUILD_TESTS)
       COMMAND "${LIGHT_OCR_ORACLE_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/oracle/verify_ground_truth.py"
         --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/corpus/fixtures"
         --lock "${CMAKE_CURRENT_SOURCE_DIR}/corpus/ground-truth.lock.json")
+    add_test(NAME light_ocr_tiled_ground_truth_verify
+      COMMAND "${LIGHT_OCR_ORACLE_PYTHON}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/oracle/tiled_ground_truth.py")
+    add_test(NAME light_ocr_tiled_golden_lock_verify
+      COMMAND "${LIGHT_OCR_ORACLE_PYTHON}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/oracle/generate_tiled_goldens.py"
+        --bundle "${CMAKE_CURRENT_SOURCE_DIR}/models/generated/ppocrv6-small-onnx-20260714.2"
+        --verify-lock-only)
     add_test(NAME light_ocr_contract_manifest_verify
       COMMAND "${LIGHT_OCR_ORACLE_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/oracle/verify_contracts.py"
         --contracts "${CMAKE_CURRENT_SOURCE_DIR}/corpus/contracts.json"
@@ -299,12 +308,29 @@ if(LIGHT_OCR_BUILD_TESTS)
         --ground-truth-lock "${CMAKE_CURRENT_SOURCE_DIR}/corpus/ground-truth.lock.json"
         --profile bounded_default
         --report "${CMAKE_BINARY_DIR}/reports/quality/ppocrv6-small-onnx-20260714.2.json")
+    add_test(NAME light_ocr_tiled_parity_corpus
+      COMMAND "${LIGHT_OCR_ORACLE_PYTHON}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/oracle/run_tiled_corpus.py"
+        --native-probe "$<TARGET_FILE:light_ocr_stage_probe>"
+        --bundle "${CMAKE_CURRENT_SOURCE_DIR}/models/generated/ppocrv6-small-onnx-20260714.2"
+        --report-dir "${CMAKE_BINARY_DIR}/reports/tiled/parity")
+    add_test(NAME light_ocr_tiled_quality
+      COMMAND "${LIGHT_OCR_ORACLE_PYTHON}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/oracle/run_tiled_quality.py"
+        --native-validate "$<TARGET_FILE:light_ocr_validate>"
+        --bundle "${CMAKE_CURRENT_SOURCE_DIR}/models/generated/ppocrv6-small-onnx-20260714.2"
+        --repetitions 1
+        --report "${CMAKE_BINARY_DIR}/reports/tiled/quality.json")
     set_tests_properties(light_ocr_oracle_golden_lock_verify
       light_ocr_oracle_bounded_golden_lock_verify light_ocr_ground_truth_verify
+      light_ocr_tiled_ground_truth_verify light_ocr_tiled_golden_lock_verify
       light_ocr_contract_manifest_verify light_ocr_parity_corpus
       light_ocr_parity_bounded_corpus
-      light_ocr_quality_baseline
+      light_ocr_quality_baseline light_ocr_tiled_parity_corpus
+      light_ocr_tiled_quality
       PROPERTIES LABELS acceptance)
+    set_tests_properties(light_ocr_tiled_parity_corpus PROPERTIES TIMEOUT 600)
+    set_tests_properties(light_ocr_tiled_quality PROPERTIES TIMEOUT 300)
     set_tests_properties(light_ocr_oracle_golden_verify
       light_ocr_oracle_bounded_golden_verify PROPERTIES LABELS canonical-oracle)
   endif()

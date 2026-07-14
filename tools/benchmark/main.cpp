@@ -17,6 +17,7 @@
 #include "common/bundle_files.hpp"
 #include "common/process_memory.hpp"
 #include "light_ocr/core.hpp"
+#include "util/sha256.hpp"
 
 namespace {
 
@@ -37,6 +38,23 @@ std::uint64_t elapsed_us(std::chrono::steady_clock::time_point begin,
                          std::chrono::steady_clock::time_point end) {
   return static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count());
+}
+
+std::string stable_result_hash(const light_ocr::OcrResult& result) {
+  auto lines = nlohmann::json::array();
+  for (const auto& line : result.lines) {
+    auto points = nlohmann::json::array();
+    for (const auto& point : line.box.points) {
+      points.push_back({point.x, point.y});
+    }
+    lines.push_back({{"text", line.text}, {"confidence", line.confidence},
+                     {"box", std::move(points)}});
+  }
+  const auto canonical = nlohmann::json({{"modelBundleId", result.model_bundle_id},
+                                          {"lines", std::move(lines)}})
+                             .dump();
+  return light_ocr::internal::sha256_hex(
+      reinterpret_cast<const std::uint8_t*>(canonical.data()), canonical.size());
 }
 
 }  // namespace
@@ -71,10 +89,12 @@ int main(int argc, char** argv) {
     Samples inference_only;
     std::array<Samples, 9> stages;
     Samples resident;
+    std::vector<std::string> result_hashes;
     wall.reserve(arguments.iterations);
     total.reserve(arguments.iterations);
     inference_only.reserve(arguments.iterations);
     resident.reserve(arguments.iterations);
+    result_hashes.reserve(arguments.iterations);
     std::uint32_t accepted_boxes = 0;
     std::size_t accepted_lines = 0;
     std::uint32_t detection_input_width = 0;
@@ -94,6 +114,7 @@ int main(int argc, char** argv) {
       const auto end = std::chrono::steady_clock::now();
       if (!result) throw std::runtime_error(result.error().message + ": " + result.error().detail);
       const auto& timing = result.value().timing;
+      result_hashes.push_back(stable_result_hash(result.value()));
       accepted_lines = result.value().lines.size();
       if (result.value().diagnostics) {
         accepted_boxes = result.value().diagnostics->accepted_boxes;
@@ -132,6 +153,12 @@ int main(int argc, char** argv) {
       stage_report[stage_names[index]] = distribution(std::move(stages[index]));
     }
     const auto resident_minmax = std::minmax_element(resident.begin(), resident.end());
+    if (!std::all_of(result_hashes.begin(), result_hashes.end(),
+                     [&result_hashes](const std::string& value) {
+                       return value == result_hashes.front();
+                     })) {
+      throw std::runtime_error("benchmark result changed between measured iterations");
+    }
     const auto engine_info = engine.value()->info();
     const auto model_bundle_id = engine_info.model_bundle_id;
     const auto detection_strategy = engine_info.detection_strategy ==
@@ -159,11 +186,15 @@ int main(int argc, char** argv) {
         {"schemaVersion", "1.0"}, {"ok", true}, {"backend", "native-cpp"},
         {"modelBundleId", model_bundle_id}, {"modelBundleBytes", model_bundle_bytes},
         {"profile", arguments.profile},
-        {"runtime", {{"detectionStrategy", detection_strategy},
+        {"runtime", {{"coreVersion", engine_info.core_version},
+                     {"normalizedConfigSchemaVersion",
+                      engine_info.normalized_config_schema_version},
+                     {"detectionStrategy", detection_strategy},
                      {"detectionMaxSide", engine_info.detection_max_side},
                      {"recognitionBatchSize", engine_info.default_recognition_batch_size}}},
         {"result", {{"acceptedBoxes", accepted_boxes},
                     {"acceptedLines", accepted_lines},
+                    {"stableSha256", result_hashes.front()},
                     {"rawDetectionBoxes", raw_detection_boxes},
                     {"suppressedDuplicateBoxes", suppressed_duplicate_boxes},
                     {"maxLiveDetectionPassBuffers", max_live_detection_pass_buffers},

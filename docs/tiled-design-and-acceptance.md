@@ -1,6 +1,6 @@
 # light-ocr Tiled Detection 技术设计与验收规格
 
-状态：Implementation in progress；Core/Node 主链路已实现，语料、独立 oracle 与四平台受审基线尚未完成，不构成已发布能力<br>
+状态：Implementation in progress；Core/Node、八张 locked 语料、独立 oracle 与发布候选门禁已实现，四平台受审基线与 0.2.0 registry evidence 尚未完成，不构成已发布能力<br>
 Authority：`DetectionStrategy::tiled` 的算法、公开 API、runtime contract、语料、报告、四平台门槛与发布条件<br>
 依赖：[高分辨率内存优化设计](memory-optimization.md) · [C++ API](native-api.md) · [Node-API 设计](napi-design.md) · [对齐与质量验证](parity-testing.md)
 
@@ -720,15 +720,15 @@ npm version 不可覆写。发现 tiled 严重问题时：
 
 ## 13. 实施顺序
 
-当前实现快照（2026-07-14）：步骤 1–5 已进入源码并通过本机 Release Core/Node 测试；步骤 7 的 CLI、1 GiB absolute gate 和四平台 artifact 采集已接入，但 baseline 尚未经四平台 run 与 review。步骤 6、8 的完整验收以及步骤 9 的公开发布仍是阻断项。
+当前实现快照（2026-07-14）：步骤 1–7 已进入源码。八张 2048² fixture 共 196 行在本机 Release Core 上达到 196 TP / 0 FP / 0 FN、CER 0、duplicate line 0，独立 Python planner/merge/stage oracle 与原生候选来源、抑制关系和最终结果对齐；四平台 Core/Node 22/24 采集、完整矩阵校验、首次 baseline candidate 和无 token 本地 registry 预检也已接入 release workflow。步骤 8 仍需一次真实四平台 run、人工 review 与 accepted baseline commit；步骤 9 的公开发布仍是阻断项。
 
 1. **Contract 与 bundle**：实现 schema `1.2` parser/validator、`tiled-v1` normalized profile、capability 和新 bundle identity；先完成 malformed/old-bundle tests。
 2. **Planner 与内部数据结构**：实现 checked axis planner、tile identity、candidate score/source metadata 和全局计数；先让纯单元 test vectors 全绿。
 3. **顺序 detection pipeline**：把 engine detection 抽成单 pass primitive，加入 ROI view、逐 tile buffer release 和原图坐标恢复；保持 bounded/upstream path goldens不变。
 4. **Merge 与全局排序**：实现 convex overlap、scope index、stable priority 和 greedy NMS；通过 threshold、chain、edge 和 fuzz regressions。
 5. **Diagnostics/API**：添加 C++ enum/info/limits/timing，再同步 raw Node-API、facade validation、runtime object 和 `.d.ts`；补齐旧 bundle与非法组合错误测试。
-6. **Corpus 与 oracle**：生成并 review 八张 locked fixtures，独立实现 Python tiled profile，保存 stage reports 和独立 goldens。
-7. **资源与性能工具**：扩展独立进程 memory gate、latency runner、report schema validator 和 result hashing；先在本机留 exploratory artifacts，不直接写 accepted baseline。
+6. **Corpus 与 oracle**（完成）：生成并锁定八张 fixtures，独立实现 Python tiled profile，保存 stage reports、独立 goldens、精确 parity exception 与十次确定性/质量报告。
+7. **资源与性能工具**（完成）：独立进程 diagnostics on/off memory gate、Core-vs-oracle 与 Node-vs-Core latency runner、报告聚合器、result hashing 和 15% regression 失败测试均已接入；工具只生成 candidate，不自动写 accepted baseline。
 8. **四平台 CI**：运行 Core/Node 完整矩阵，review 并提交首批 baseline，验证 15% regression gate 会对故意注入的超限样本失败。
 9. **Package 与文档发布**：更新六包 staging、local registry/offline test、README 中英文和 release evidence；所有 gate 全绿后发布 `next`，最后提升 `latest`。
 
@@ -740,9 +740,9 @@ npm version 不可覆写。发现 tiled 严重问题时：
 
 - [x] schema `1.2`、`tiled-v1`、新 bundle ID/hash 和旧 bundle rejection 已实现并测试。
 - [x] axis planner、row-major pass、单 tile buffer lifetime 和 checked limits 通过单元/集成测试。
-- [ ] DB score/source metadata、IoU/IOS merge、代表选择和全局 reading order 通过 oracle parity。
-- [ ] 2048 small-text、dense、水平边界、垂直边界、四 tile 交点、原图边缘、near-neighbor 与 reading-order ground truth 全部通过。
-- [ ] 最终 duplicate-line count 为 0，近邻独立行无误合并，连续 10 次结果稳定。
+- [x] DB score/source metadata、IoU/IOS merge、代表选择和全局 reading order 通过独立 oracle parity。
+- [x] 2048 small-text、dense、水平边界、垂直边界、四 tile 交点、原图边缘、near-neighbor 与 reading-order ground truth 全部通过。
+- [x] 最终 duplicate-line count 为 0，近邻独立行无误合并，连续 10 次结果稳定。
 - [x] C++ public enum/info/diagnostics/timing/limits 与 Node runtime/`.d.ts` 同步，非法组合和旧 bundle 得到稳定错误。
 - [ ] Linux x64 glibc、Windows x64、macOS arm64、macOS x64 的 Core 与 Node absolute peak 均通过 hard gate并保存非空报告。
 - [ ] 四平台 warm median/p95 基线已受审提交，relative bootstrap 和后续 `1.15x` regression gate 有真实失败测试。

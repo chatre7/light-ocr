@@ -25,6 +25,17 @@ class NpmReleaseTests(unittest.TestCase):
                 )
             )
 
+    def test_rejects_a_version_that_does_not_match_the_source(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "does not match source version"):
+            npm_release.assemble(
+                argparse.Namespace(
+                    version="0.2.1",
+                    bundle=Path("unused"),
+                    native_root=Path("unused"),
+                    output_dir=Path("unused"),
+                )
+            )
+
     @mock.patch("tools.npm_release.subprocess.run")
     def test_registry_lookup_bypasses_stale_npm_metadata(self, run: mock.Mock) -> None:
         run.return_value = subprocess.CompletedProcess(

@@ -170,6 +170,9 @@ LIGHT_OCR_TEST(tiled_merge_prefers_complete_non_boundary_candidate) {
   EXPECT_TRUE(merged);
   EXPECT_EQ(merged.value().representatives.size(), 1u);
   EXPECT_EQ(merged.value().suppressed_duplicates, 1u);
+  EXPECT_EQ(merged.value().suppressions.size(), 1u);
+  EXPECT_EQ(merged.value().suppressions[0].candidate_tile_ordinal, 0u);
+  EXPECT_EQ(merged.value().suppressions[0].representative_tile_ordinal, 1u);
   EXPECT_EQ(merged.value().representatives[0].tile_ordinal, 1u);
 }
 

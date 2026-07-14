@@ -17,6 +17,9 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SOURCE_VERSION = json.loads(
+    (ROOT / "bindings" / "node" / "package.json").read_text("utf-8")
+)["version"]
 BUNDLE_ID = "ppocrv6-small-onnx-20260714.2"
 MODEL_PACKAGE = "@arcships/light-ocr-model-ppocrv6-small"
 FACADE_PACKAGE = "@arcships/light-ocr"
@@ -240,6 +243,10 @@ def assemble(arguments: argparse.Namespace) -> None:
     version = arguments.version
     if tuple(int(part) for part in version.split(".")) < (0, 2, 0):
         raise RuntimeError("tiled-v1 packages require version 0.2.0 or newer")
+    if version != SOURCE_VERSION:
+        raise RuntimeError(
+            f"release version {version} does not match source version {SOURCE_VERSION}"
+        )
     output = arguments.output_dir.resolve()
     native_root = arguments.native_root.resolve()
     bundle = arguments.bundle.resolve()

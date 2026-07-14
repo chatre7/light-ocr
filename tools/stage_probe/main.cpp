@@ -15,6 +15,7 @@
 #include "common/arguments.hpp"
 #include "common/bundle_files.hpp"
 #include "detection/db_postprocess.hpp"
+#include "detection/tiled.hpp"
 #include "geometry/geometry.hpp"
 #include "inference/onnxruntime/backend.hpp"
 #include "light_ocr/core.hpp"
@@ -129,6 +130,209 @@ Json decoded_json(const DecodedText& decoded) {
           {"selectedProbabilities", decoded.selected_probabilities}};
 }
 
+Json tile_json(const TileRect& tile) {
+  return {{"ordinal", tile.ordinal}, {"x", tile.x}, {"y", tile.y},
+          {"width", tile.width}, {"height", tile.height}};
+}
+
+Json tiled_candidate_json(const TiledCandidate& candidate) {
+  Json edges = Json::array();
+  if ((candidate.nearby_artificial_edges & artificial_left) != 0) edges.push_back("left");
+  if ((candidate.nearby_artificial_edges & artificial_top) != 0) edges.push_back("top");
+  if ((candidate.nearby_artificial_edges & artificial_right) != 0) edges.push_back("right");
+  if ((candidate.nearby_artificial_edges & artificial_bottom) != 0) edges.push_back("bottom");
+  return {{"quad", quad_json(candidate.global_quad)},
+          {"score", candidate.db_score},
+          {"tileOrdinal", candidate.tile_ordinal},
+          {"candidateOrdinal", candidate.candidate_ordinal},
+          {"sourceTile", tile_json(candidate.source_tile)},
+          {"nearbyArtificialEdges", std::move(edges)},
+          {"distanceToNearestArtificialEdge",
+           candidate.distance_to_nearest_artificial_edge}};
+}
+
+Json run_tiled_probe(const BundleData& data, OnnxSession& detection_session,
+                     OnnxSession& recognition_session,
+                     const ValidatedImage& validated, const ImageView& image) {
+  if (!data.tiled_detection) {
+    throw std::runtime_error("tiled-v1 is unavailable in this bundle");
+  }
+  auto tiles = checked(plan_detection_tiles(image.width, image.height,
+                                             *data.tiled_detection,
+                                             data.limits.max_detection_tiles),
+                       "tile plan");
+  Json passes = Json::array();
+  Json raw_candidate_records = Json::array();
+  std::vector<TiledCandidate> raw_candidates;
+  for (const auto& tile : tiles) {
+    const cv::Mat roi = validated.bgr(cv::Rect(
+        static_cast<int>(tile.x), static_cast<int>(tile.y),
+        static_cast<int>(tile.width), static_cast<int>(tile.height)));
+    auto detection_input = checked(
+        make_detection_input(roi, data.detection, DetectionStrategy::bounded,
+                             data.tiled_detection->tile_side, data.limits),
+        "tiled detection preprocess");
+    auto detection_output = checked(
+        detection_session.run(detection_input.values, detection_input.shape),
+        "tiled detection inference");
+    auto detected = checked(
+        db_postprocess(detection_output.data(), detection_output.size(),
+                       detection_output.shape(), tile.width, tile.height,
+                       data.detection, data.limits, true, true),
+        "tiled detection postprocess");
+    if (detected.boxes.size() != detected.scores.size()) {
+      throw std::runtime_error("tiled stage probe box/score count mismatch");
+    }
+    Json accepted = Json::array();
+    for (std::size_t index = 0; index < detected.boxes.size(); ++index) {
+      auto candidate = checked(
+          make_tiled_candidate(
+              detected.boxes[index], detected.scores[index], tile,
+              image.width, image.height, static_cast<std::uint32_t>(index),
+              data.tiled_detection->artificial_boundary_margin),
+          "tiled candidate restore");
+      accepted.push_back({{"tileOrdinal", candidate.tile_ordinal},
+                          {"candidateOrdinal", candidate.candidate_ordinal}});
+      raw_candidate_records.push_back(tiled_candidate_json(candidate));
+      raw_candidates.push_back(std::move(candidate));
+    }
+    Json trace_records = Json::array();
+    for (const auto& trace : detected.traces) {
+      trace_records.push_back(detection_trace_json(trace));
+    }
+    passes.push_back(
+        {{"tileOrdinal", tile.ordinal},
+         {"roi", {tile.x, tile.y, tile.width, tile.height}},
+         {"detectionInput",
+          {{"shape", shape_json(detection_input.shape)},
+           {"sha256Float32LE", float_hash(detection_input.values)},
+           {"samples", samples_json(detection_input.values)}}},
+         {"detectionOutput",
+          {{"shape", shape_json(detection_output.shape())},
+           {"sha256Float32LE",
+            float_hash(detection_output.data(), detection_output.size())},
+           {"samples",
+            samples_json(detection_output.data(), detection_output.size())}}},
+         {"contourCandidates", detected.contour_candidates},
+         {"thresholdBitmapSha256", detected.threshold_bitmap_sha256},
+         {"detectionCandidates", std::move(trace_records)},
+         {"acceptedCandidates", std::move(accepted)}});
+  }
+
+  auto merged = checked(merge_tiled_candidates(std::move(raw_candidates),
+                                                *data.tiled_detection),
+                        "tiled merge");
+  Json suppressions = Json::array();
+  for (const auto& suppression : merged.suppressions) {
+    suppressions.push_back(
+        {{"candidate", {suppression.candidate_tile_ordinal,
+                         suppression.candidate_ordinal}},
+         {"representative", {suppression.representative_tile_ordinal,
+                              suppression.representative_ordinal}}});
+  }
+  Json representatives = Json::array();
+  std::vector<Quad> boxes;
+  boxes.reserve(merged.representatives.size());
+  for (const auto& representative : merged.representatives) {
+    representatives.push_back({representative.tile_ordinal,
+                               representative.candidate_ordinal});
+    boxes.push_back(representative.global_quad);
+  }
+  auto sorted_boxes = sort_reading_order(std::move(boxes), data.geometry);
+  auto crops = checked(
+      crop_text_regions(validated.bgr, sorted_boxes, data.geometry, data.limits),
+      "tiled crop");
+  auto plans = checked(
+      plan_recognition_batches(sorted_boxes, data.geometry, data.recognition,
+                               data.recognition.default_batch_size, data.limits),
+      "tiled recognition plan");
+
+  Json output = {
+      {"schemaVersion", "1.0"},
+      {"profile", "tiled_v1"},
+      {"modelBundleId", data.id},
+      {"image", {{"width", image.width}, {"height", image.height}}},
+      {"models",
+       {{"detection",
+         {{"inputName", detection_session.input_name()},
+          {"outputName", detection_session.output_name()}}},
+        {"recognition",
+         {{"inputName", recognition_session.input_name()},
+          {"outputName", recognition_session.output_name()}}}}},
+      {"contractVersion", data.tiled_detection->contract_version},
+      {"detectionPasses", std::move(passes)},
+      {"rawCandidates", std::move(raw_candidate_records)},
+      {"suppressions", std::move(suppressions)},
+      {"representatives", std::move(representatives)},
+      {"boxes", Json::array()},
+      {"crops", Json::array()},
+      {"recognitionBatches", Json::array()},
+      {"decoded", Json::array()},
+      {"lines", Json::array()},
+  };
+  for (const auto& box : sorted_boxes) output["boxes"].push_back(quad_json(box));
+  for (std::size_t index = 0; index < crops.size(); ++index) {
+    const auto pixels = mat_bytes(crops[index]);
+    output["crops"].push_back(
+        {{"index", index},
+         {"width", crops[index].cols},
+         {"height", crops[index].rows},
+         {"channels", crops[index].channels()},
+         {"sha256Bgr8", sha256_hex(pixels.data(), pixels.size())},
+         {"pixelsBgr8Base64", base64_encode(pixels)}});
+  }
+
+  std::vector<DecodedText> decoded(sorted_boxes.size());
+  for (std::size_t batch_index = 0; batch_index < plans.size(); ++batch_index) {
+    const auto& plan = plans[batch_index];
+    std::vector<cv::Mat> batch_crops;
+    batch_crops.reserve(plan.samples.size());
+    for (const auto& sample : plan.samples) {
+      batch_crops.push_back(crops[sample.input_index]);
+    }
+    auto batch = checked(
+        make_recognition_batch(batch_crops, plan, data.recognition, data.limits),
+        "tiled recognition preprocess");
+    auto recognition_output = checked(
+        recognition_session.run(batch.values, batch.shape),
+        "tiled recognition inference");
+    auto batch_decoded = checked(
+        decode_ctc(recognition_output.data(), recognition_output.size(),
+                   recognition_output.shape(), data.recognition.characters,
+                   data.recognition.blank_index,
+                   data.recognition.collapse_repeats),
+        "tiled recognition decode");
+    if (batch_decoded.size() != batch.input_indices.size()) {
+      throw std::runtime_error("tiled recognition result count mismatch");
+    }
+    output["recognitionBatches"].push_back(
+        {{"batchIndex", batch_index},
+         {"inputIndices", batch.input_indices},
+         {"inputShape", shape_json(batch.shape)},
+         {"inputSha256Float32LE", float_hash(batch.values)},
+         {"inputSamples", samples_json(batch.values)},
+         {"outputShape", shape_json(recognition_output.shape())},
+         {"outputSha256Float32LE",
+          float_hash(recognition_output.data(), recognition_output.size())},
+         {"outputSamples",
+          samples_json(recognition_output.data(), recognition_output.size())}});
+    for (std::size_t index = 0; index < batch.input_indices.size(); ++index) {
+      decoded[batch.input_indices[index]] = batch_decoded[index];
+    }
+  }
+  for (std::size_t index = 0; index < decoded.size(); ++index) {
+    output["decoded"].push_back(decoded_json(decoded[index]));
+    if (!decoded[index].text.empty() &&
+        decoded[index].confidence >= data.recognition.default_score_threshold) {
+      output["lines"].push_back(
+          {{"text", decoded[index].text},
+           {"confidence", decoded[index].confidence},
+           {"box", quad_json(sorted_boxes[index])}});
+    }
+  }
+  return output;
+}
+
 }  // namespace
 
 class StageProbe {
@@ -147,6 +351,10 @@ class StageProbe {
                             data.recognition.characters.size() + 1),
         "recognition session");
     auto validated = checked(validate_and_convert_image(image, data.limits), "image");
+    if (profile == "tiled_v1") {
+      return run_tiled_probe(data, *detection_session, *recognition_session,
+                             validated, image);
+    }
     const auto upstream_exact = profile == "upstream_exact";
     if (!upstream_exact && profile != "bounded_default" &&
         profile != "runtime_default") {

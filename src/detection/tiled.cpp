@@ -355,18 +355,22 @@ Result<TiledMergeResult> merge_tiled_candidates(
 
   TiledMergeResult result;
   result.representatives.reserve(candidates.size());
+  result.suppressions.reserve(candidates.size());
   for (auto& candidate : candidates) {
-    const auto duplicate = std::any_of(
+    const auto duplicate = std::find_if(
         result.representatives.begin(), result.representatives.end(),
         [&](const auto& representative) {
           return duplicates(representative, candidate, config);
         });
-    if (duplicate) {
+    if (duplicate != result.representatives.end()) {
       if (result.suppressed_duplicates ==
           std::numeric_limits<std::uint32_t>::max()) {
         return failure<TiledMergeResult>(ErrorCode::resource_limit_exceeded,
                                          "Tiled duplicate count overflowed");
       }
+      result.suppressions.push_back(TiledMergeResult::Suppression{
+          candidate.tile_ordinal, candidate.candidate_ordinal,
+          duplicate->tile_ordinal, duplicate->candidate_ordinal});
       ++result.suppressed_duplicates;
     } else {
       result.representatives.push_back(std::move(candidate));

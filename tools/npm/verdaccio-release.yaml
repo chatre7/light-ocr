@@ -1,0 +1,30 @@
+storage: ./storage
+
+auth:
+  htpasswd:
+    file: ./htpasswd
+    max_users: 10
+
+packages:
+  "@*/*":
+    access: $all
+    publish: $authenticated
+    unpublish: $authenticated
+  "**":
+    access: $all
+    publish: $authenticated
+    unpublish: $authenticated
+
+server:
+  keepAliveTimeout: 60
+
+middlewares:
+  audit:
+    enabled: false
+
+log:
+  type: stdout
+  format: pretty
+  level: warn
+
+listen: 127.0.0.1:4873

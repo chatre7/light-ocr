@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/arcships/light-ocr/contracts/tiled-platform-baselines.schema.json",
+  "title": "light-ocr tiled-v1 platform baselines",
+  "type": "object",
+  "required": [
+    "schema",
+    "status",
+    "contractVersion",
+    "modelBundleId",
+    "generatedFromCommit",
+    "groundTruthLockSha256",
+    "matrix",
+    "entries"
+  ],
+  "properties": {
+    "schema": { "const": "light-ocr-tiled-platform-baselines/1.0" },
+    "status": { "enum": ["candidate", "accepted"] },
+    "contractVersion": { "const": "tiled-v1" },
+    "modelBundleId": { "const": "ppocrv6-small-onnx-20260714.2" },
+    "generatedFromCommit": { "type": "string", "minLength": 7 },
+    "approvedByCommit": { "type": "string", "minLength": 7 },
+    "groundTruthLockSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "matrix": { "type": "object" },
+    "entries": {
+      "type": "array",
+      "minItems": 36,
+      "maxItems": 36,
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "samples",
+          "medianUs",
+          "p95Us",
+          "inferenceOnlyMedianUs",
+          "absolutePeakBytes",
+          "diagnosticsPeakBytes",
+          "comparator",
+          "resultHashes",
+          "reportDigests"
+        ]
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "accepted" } } },
+      "then": { "required": ["approvedByCommit"] }
+    }
+  ],
+  "additionalProperties": false
+}
