@@ -641,6 +641,8 @@ hard memory/latency cases 至少包含 `tiled-small-text-2048`、`tiled-dense-20
 
 每个平台、fixture、Core/Node 组合固定 1/1 ORT threads：先 warmup 5 次，再测量 10 次完整 recognize；报告 median 与 nearest-rank p95。机器被标记为 noisy、CPU 信息变化或 thermal/power 条件不可确认时，结果只能作为 artifact，不能更新 committed baseline。
 
+release workflow 先在 build job 生成并验签 benchmark 工具归档，再交给同 OS/arch 的全新 runner 解包。Core 与 Python oracle 只在这个隔离 job 中采样；编译和 Node 测试留下的瞬时负载、热状态与缓存状态不得进入可接受 baseline。Core 与 Python 仍在同一 runner、相同线程配置和同一 fixture 上按固定次序比较，因此隔离不改变 comparator identity。
+
 首个 baseline 的 bootstrap 同时满足：
 
 - 所有 10 次调用在 `120 s` hard timeout 内完成；
