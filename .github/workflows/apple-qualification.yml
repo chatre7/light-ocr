@@ -1,6 +1,21 @@
 name: Apple device qualification
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/apple-qualification.yml"
+      - "CMakeLists.txt"
+      - "bindings/node/**"
+      - "contracts/apple-provider-baselines.schema.json"
+      - "include/**"
+      - "src/**"
+      - "tests/integration/apple.cpp"
+      - "tests/python/test_apple_qualification.py"
+      - "tools/apple/**"
+      - "tools/benchmark/**"
+      - "tools/common/**"
+      - "tools/leak_check/**"
   workflow_dispatch:
     inputs:
       run_qualification:
@@ -18,7 +33,7 @@ concurrency:
 
 jobs:
   derive-models:
-    if: inputs.run_qualification
+    if: github.event_name == 'pull_request' || inputs.run_qualification
     runs-on: macos-15
     timeout-minutes: 90
     steps:
@@ -42,7 +57,7 @@ jobs:
           retention-days: 30
 
   qualify:
-    if: inputs.run_qualification
+    if: github.event_name == 'pull_request' || inputs.run_qualification
     needs: derive-models
     name: qualify ${{ matrix.id }}
     strategy:
@@ -155,7 +170,7 @@ jobs:
           retention-days: 90
 
   collect:
-    if: inputs.run_qualification
+    if: github.event_name == 'pull_request' || inputs.run_qualification
     needs: qualify
     runs-on: ubuntu-24.04
     steps:

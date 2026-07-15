@@ -224,9 +224,12 @@ Apple provider 另使用显式双设备资格 workflow；它在标准 `macos-15`
 91-function placement、5 个哨兵宽度 tensor parity、14-fixture 质量、两 workload 性能/CPU-time、并发空缓存、
 cold start/RSS 和 100 次生命周期 Gate：
 
+首次引入 workflow 的 PR 会在相关 Apple/runtime 路径变化时自动运行，避免
+`workflow_dispatch` 只能从默认分支发现 workflow 的循环依赖。合并后可显式重跑：
+
 ```bash
 gh workflow run apple-qualification.yml \
-  --ref codex/apple-device-acceleration \
+  --ref main \
   -f run_qualification=true
 ```
 
