@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "contractId": "linux-x64-gnu-webgpu-ort-1.23.0-monolithic-v1",
+  "scope": {
+    "operatingSystem": "linux",
+    "architecture": "x86_64",
+    "libc": "glibc"
+  },
+  "topology": {
+    "kind": "monolithic",
+    "providers": [
+      "cpu",
+      "webgpu"
+    ],
+    "webgpuImplementation": "Dawn Native",
+    "graphicsBackend": "Vulkan",
+    "plugin": null
+  },
+  "sources": {
+    "onnxruntime": {
+      "url": "https://github.com/microsoft/onnxruntime.git",
+      "version": "1.23.0",
+      "tag": "v1.23.0",
+      "commit": "be835efc56aca19b8e810538ec93c8e150e0fc61"
+    },
+    "dawn": {
+      "url": "https://github.com/google/dawn/archive/9733be39e18186961d503e064874afe3e9ceb8d1.zip",
+      "revision": "9733be39e18186961d503e064874afe3e9ceb8d1",
+      "archiveSha1": "2a4017c32892b90d072a9102eba90ae691fae36d",
+      "authority": "onnxruntime/cmake/deps.txt"
+    }
+  },
+  "build": {
+    "configuration": "Release",
+    "generator": "Ninja",
+    "upstreamArguments": [
+      "--update",
+      "--build",
+      "--config",
+      "Release",
+      "--build_shared_lib",
+      "--use_webgpu",
+      "--skip_tests",
+      "--cmake_generator",
+      "Ninja"
+    ],
+    "cmakeDefinitions": {
+      "onnxruntime_BUILD_UNIT_TESTS": "OFF",
+      "onnxruntime_BUILD_NODEJS": "OFF",
+      "onnxruntime_BUILD_DAWN_MONOLITHIC_LIBRARY": "OFF",
+      "onnxruntime_USE_EXTERNAL_DAWN": "OFF",
+      "DAWN_BUILD_TESTS": "OFF",
+      "DAWN_BUILD_SAMPLES": "OFF",
+      "DAWN_BUILD_NODE_BINDINGS": "OFF",
+      "DAWN_ENABLE_VULKAN": "ON",
+      "DAWN_ENABLE_D3D11": "OFF",
+      "DAWN_ENABLE_D3D12": "OFF",
+      "DAWN_ENABLE_METAL": "OFF",
+      "DAWN_ENABLE_DESKTOP_GL": "OFF",
+      "DAWN_ENABLE_OPENGLES": "OFF",
+      "DAWN_USE_X11": "OFF",
+      "DAWN_USE_WAYLAND": "OFF"
+    }
+  },
+  "artifacts": {
+    "versionedLibrary": "libonnxruntime.so.1.23.0",
+    "soname": "libonnxruntime.so.1",
+    "symlinks": {
+      "libonnxruntime.so": "libonnxruntime.so.1",
+      "libonnxruntime.so.1": "libonnxruntime.so.1.23.0"
+    },
+    "runpath": "$ORIGIN",
+    "allowedDynamicDependencies": [
+      "libstdc++.so.6",
+      "libm.so.6",
+      "libgcc_s.so.1",
+      "libc.so.6",
+      "ld-linux-x86-64.so.2"
+    ],
+    "productionSha256": null,
+    "productionHashStatus": "pending"
+  },
+  "qualification": {
+    "status": "proof-of-concept-only",
+    "evidenceId": "native-webgpu-ort-1.23.0-20260716",
+    "evidenceArtifactSha256": "fb96eb8a8fb22adc058bad8e6d1379c2bcc4ff643ddc019e4c71adc25e2ff831",
+    "evidenceArtifactHashIsProductionLock": false,
+    "providerGatePassed": false,
+    "knownLimitations": [
+      "The evidence is Linux x64 inference-only on one NVIDIA Vulkan device, not an end-to-end or cross-vendor Provider Gate.",
+      "Recognition partitions Slice.2, Concat.2, and Gather to CPU; cpuPartition=forbid fails.",
+      "The production artifact SHA-256 is intentionally unset until a release builder produces and qualifies an artifact."
+    ]
+  }
+}
