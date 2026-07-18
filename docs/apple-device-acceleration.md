@@ -6,7 +6,7 @@
 
 范围：以 macOS 15+ 为当前交付目标；Apple Silicon 使用 ANE/GPU 混合路由，Intel Mac 使用 CPU+GPU 路由；iPhone/iPad 不在当前 Tier 1 平台承诺内
 
-实施状态：Direct Objective-C++ Core ML bridge、schema 1.1 capability manifest、哈希锁 FP16 模型派生、自包含 npm 模型包、ANE/GPU 与 Intel CPU+GPU 路由、严格 GPU 模式、离线编译缓存、跨进程锁、20 个加权宽度桶的有界函数缓存、C++/Node API 和资格工具均已实现。当前实现仍要求显式 Apple；D112 已接受未来 macOS Auto 外层顺序 `apple → cpu`，实现与发布接线待完成。生产 bundle 使用 `devicePolicy: open-macos`，macOS 15+ 的 arm64/x86_64 Mac 均可尝试 Core ML；`validatedDeviceFamilies: ["Apple M4"]` 只标记已有性能证据，不再充当运行白名单。`deviceValidated` 让调用方区分 M4 实证与其他设备的实验兼容。
+实施状态：Direct Objective-C++ Core ML bridge、schema 1.1 capability manifest、哈希锁 FP16 模型派生、自包含 npm 模型包、ANE/GPU 与 Intel CPU+GPU 路由、严格 GPU 模式、离线编译缓存、跨进程锁、20 个加权宽度桶的有界函数缓存、C++/Node API、资格工具和 D112 macOS Auto 外层顺序 `apple → cpu` 均已在源码实现，平台发布证据仍待完成。生产 bundle 使用 `devicePolicy: open-macos`，macOS 15+ 的 arm64/x86_64 Mac 均可尝试 Core ML；`validatedDeviceFamilies: ["Apple M4"]` 只标记已有性能证据，不再充当运行白名单。`deviceValidated` 让调用方区分 M4 实证与其他设备的实验兼容。
 
 关联 Roadmap：[Perf-0–Perf-4](roadmap.md#7-perf-0perf-4--性能与宿主加速线)
 
@@ -384,7 +384,7 @@ Apple provider 继承 Roadmap Provider Gate，并增加交互式 CPU 目标：
 
 - Detector、常规 recognition 优先 FP16 ANE。
 - ANE-unqualified recognition shape 使用 FP16 GPU。
-- 加入 lazy load、缓存、严格 placement 诊断；后续 D112 实现删除历史显式 Apple fallback，并将创建期跨 backend 选择迁移到 Auto 外层状态机；旧 `sessionFallback=cpu` 统一变为 `invalid_argument`。
+- 加入 lazy load、缓存、严格 placement 诊断；D112 已删除历史显式 Apple fallback，并将创建期跨 backend 选择迁移到 Auto 外层状态机；旧 `sessionFallback=cpu` 统一变为 `invalid_argument`。
 - 通过完整文档、质量、CPU、RSS 和 cold-start Gate。
 
 退出条件：证明混合路径比 FP16 GPU 和 CPU-fast 更适合用户前台共存。

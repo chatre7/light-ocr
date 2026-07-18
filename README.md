@@ -146,7 +146,7 @@ console.log(rawResult.lines);
 await engine.close();
 ```
 
-The Apple provider remains opt-in. The following is a maintainer/source-checkout preview, not an `npm install` path for `0.2.0`. It assumes the locked self-contained Apple bundle has already been derived by the local release tooling described in [Build and release](docs/build-and-release.md#8-ci). Request the provider explicitly and keep the whole-session CPU fallback visible:
+The current source candidate uses a platform runtime descriptor for Auto selection; explicit Apple remains available as a strict, single-provider request. The following is a maintainer/source-checkout preview, not an `npm install` path for `0.2.0`. It assumes the locked self-contained Apple bundle has already been derived by the local release tooling described in [Build and release](docs/build-and-release.md#8-ci):
 
 ```ts
 const engine = await createEngine({
@@ -156,14 +156,14 @@ const engine = await createEngine({
     provider: "apple",
     precision: "fp16",
     cpuPartition: "allow",
-    sessionFallback: "cpu",
+    sessionFallback: "error",
   },
 });
 
 console.log(engine.info.execution.sessions.detection.deviceValidated);
 ```
 
-`cpuPartition: "allow"` works on both Apple Silicon and Intel Macs. The strict GPU-only profile is Apple-Silicon-only. Normal npm users should keep the default CPU provider until the Apple payload is published.
+`cpuPartition: "allow"` works on both Apple Silicon and Intel Macs. The strict GPU-only profile is Apple-Silicon-only. Explicit providers never fall through to CPU; only Auto may advance through its descriptor-locked creation candidates. Published `0.2.0` packages remain CPU-default until the source candidate is released.
 
 See the [Node.js guide](bindings/node/README.md) for the full API, cancellation, queue limits, and lifecycle behavior.
 

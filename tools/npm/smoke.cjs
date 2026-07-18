@@ -39,23 +39,15 @@ async function main() {
     execution: {
       provider: 'apple',
       precision: 'fp16',
-      sessionFallback: 'cpu',
+      sessionFallback: 'error',
     },
   });
   try {
     assert.equal(apple.info.execution.requestedProvider, 'apple');
     const detection = apple.info.execution.sessions.detection;
-    if (apple.info.executionProvider === 'CoreML') {
-      assert.equal(detection.sessionFallback, false);
-      assert.match(detection.qualificationId, /^apple-/);
-    } else {
-      assert.equal(apple.info.executionProvider, 'CPUExecutionProvider');
-      assert.equal(detection.sessionFallback, true);
-      assert.match(
-        detection.fallbackReason,
-        /^apple_(provider_not_built|device_unavailable|device_unqualified|initialization_failed)$/,
-      );
-    }
+    assert.equal(apple.info.executionProvider, 'CoreML');
+    assert.equal(detection.sessionFallback, false);
+    assert.match(detection.qualificationId, /^apple-/);
   } finally {
     await apple.close();
   }

@@ -167,6 +167,8 @@ int main() {
         execution.recognition.model_id != "PP-OCRv6_small_rec_onnx" ||
         execution.detection.model_sha256.size() != 64 ||
         execution.recognition.model_sha256.size() != 64 ||
+        execution.detection.qualification_id != "builtin-cpu-v1" ||
+        execution.recognition.qualification_id != "builtin-cpu-v1" ||
         !execution.detection.device_validated ||
         !execution.recognition.device_validated ||
         execution.detection.precision != "fp32" ||

@@ -328,9 +328,10 @@ struct RecognizeOptions {
 Rules:
 
 - Thread counts are positive and fixed at creation.
-- CPU remains the default. It accepts `auto`/`fp32`, requires `cpuPartition=allow`, `sessionFallback=error`, and uses the existing ONNX Runtime path.
+- Auto is the source-candidate default and accepts only provider-neutral options. Its ordered candidates come from the immutable platform runtime descriptor and always end in CPU; a CPU-only package resolves directly to `[cpu]`.
+- Explicit CPU accepts `auto`/`fp32`, requires `cpuPartition=allow`, `sessionFallback=error`, and uses the existing ONNX Runtime path. Explicit providers attempt only the requested backend.
 - The Apple provider accepts `auto`/`fp16`, bounded detection no larger than 960, recognition batch 1, and latency mode. Production bundles use open macOS compatibility: Apple Silicon with `cpuPartition=allow` selects FP16 ANE plus the width-based FP16 GPU route, while Intel Mac selects Core ML CPU+GPU. `cpuPartition=forbid` selects the all-GPU strict path and is accepted only on Apple Silicon.
-- `sessionFallback=cpu` permits one explicit whole-session fallback when the Apple build, macOS version/architecture, an opt-in `validated-only` policy, or Core ML initialization prevents startup. The chosen CPU sessions report `session_fallback=true` and one of the stable reasons `apple_provider_not_built`, `apple_device_unavailable`, `apple_device_unqualified`, or `apple_initialization_failed`. Production `open-macos` bundles do not reject a Mac merely because it lacks reviewed device evidence. Inference-time failures never retry on CPU.
+- `sessionFallback` is a migration field whose only valid value is `error`; `sessionFallback=cpu` returns `invalid_argument`. Only Auto may continue to another backend during creation, using D112 typed reasons and a structured selection trace. Inference-time failures never retry on CPU.
 - Apple execution requires a schema 1.1 bundle containing the hash-locked provider payload. Unsupported device IDs, throughput mode, precision/provider combinations, detection strategies, and batch sizes fail instead of being ignored.
 - Score thresholds are finite and in `[0, 1]`.
 - Batch sizes are positive and no larger than the effective limit.

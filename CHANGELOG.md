@@ -8,8 +8,8 @@ This file records user-visible changes to `light-ocr`. Published artifact detail
 
 - Added an opt-in Direct Core ML provider for the `0.2.1` source candidate. Apple Silicon routes FP16 detection and shorter recognition shapes through the Neural Engine envelope, with wider recognition shapes on the GPU.
 - Added experimental macOS 15+ compatibility for both `arm64` and `x86_64`. Intel Macs use Core ML CPU+GPU because they do not have an Apple Neural Engine; the strict GPU-only profile remains Apple-Silicon-only.
-- Added per-provider and per-session execution diagnostics, including configured provider chain, device family, operating system, precision, model/cache identity, stable fallback reason, and `deviceValidated` evidence status.
-- Added a self-contained Apple model bundle, deterministic Core ML derivation, offline compiled-model cache, cross-process cache locking, bounded recognition-function caching, and explicit whole-session CPU fallback.
+- Added per-provider and per-session execution diagnostics, including configured provider chain, device family, operating system, precision, model/cache identity, qualification identity, a structured Auto creation trace, and `deviceValidated` evidence status.
+- Added a self-contained Apple model bundle, deterministic Core ML derivation, offline compiled-model cache, cross-process cache locking, bounded recognition-function caching, and descriptor-driven platform Auto selection.
 
 ### Performance
 
@@ -26,7 +26,7 @@ This file records user-visible changes to `light-ocr`. Published artifact detail
 
 ### Compatibility and evidence
 
-- CPU remains the default provider. Apple acceleration requires an explicit `provider: "apple"` request and can use `sessionFallback: "cpu"` for a visible whole-session fallback.
+- The current source candidate defaults to descriptor-driven Auto selection. Explicit providers are strict single-backend requests, and the legacy `sessionFallback: "cpu"` value returns `invalid_argument`.
 - Production bundles use `devicePolicy: "open-macos"`: M1–M3, later Apple Silicon, and Intel Macs are not blocked by the current evidence list.
 - Real-device performance data currently comes from one Apple M4 Max runner. The evidence contract classifies it under the `Apple M4` device family for `deviceValidated`; this is not a claim that every M4 SKU was measured separately. Other Macs report `deviceValidated: false`; experimental compatibility is available, but no performance number is promised until that hardware family is reviewed.
 - Heavy model conversion, Compute Plan placement, performance, cache, and lifecycle qualification remain local real-device work. Ordinary CI stays limited to cross-platform builds, contracts, and lightweight tests and does not require paid runners.

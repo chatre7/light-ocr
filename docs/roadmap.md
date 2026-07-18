@@ -526,7 +526,7 @@ interface CandidateExecutionOptions {
 
 契约规则：
 
-- `provider=auto` 是 D112 实现后的平台默认；当前 `0.2.0` 与 `0.2.1` 源码候选仍保持 D111 的显式 CPU 默认。已发布版本只把通过平台 Gate、由 runtime descriptor 声明且实际随包交付的 backend 放入版本化候选序；仅交付 CPU 时 Auto 列表就是 `[cpu]`；
+- `provider=auto` 已是当前源码候选的平台默认；已发布的 `0.2.0` 仍保持 D111 的显式 CPU 默认。新版本只把通过平台 Gate、由 runtime descriptor 声明且实际随包交付的 backend 放入版本化候选序；仅交付 CPU 时 Auto 列表就是 `[cpu]`；
 - 只有 `auto` 可在 `Engine` 创建期间跨 backend 回退。目标策略为 macOS `apple → cpu`、Windows/Linux `webgpu → cpu`；精确状态机、封闭的可跳过/致命原因码和原子 session 创建由 D112 定义；
 - 显式 `provider=cpu|apple|webgpu|…` 只尝试指定 backend，失败直接传播。`sessionFallback` 仅为迁移字段；Auto 和显式模式都只接受 `error`，任何 `sessionFallback=cpu` 都返回 `invalid_argument`；
 - 首版 Auto 只接受 provider-neutral 默认值：`sessionFallback=error`、`cpuPartition=allow`、`performanceHint=latency`、`precision=auto` 且没有 `deviceId`。严格 partition、throughput、显式 precision 或设备 ID 要求显式 provider；与 Auto 组合时在任何 factory call 前返回 `invalid_argument`；

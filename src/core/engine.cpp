@@ -1023,7 +1023,8 @@ Result<std::unique_ptr<Engine>> internal::EngineFactory::create(
                                  false});
     }
     info.execution.selection_trace = std::move(selection.trace);
-    if (policy_includes_provider(runtime_policy, "apple")) {
+    if (policy_includes_provider(runtime_policy, "apple") &&
+        bundle.data_->apple_provider) {
       info.execution.provider_capabilities.push_back(
           ProviderCapabilityInfo{"apple",
                                  true,

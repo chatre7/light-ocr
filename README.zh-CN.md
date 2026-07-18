@@ -146,7 +146,7 @@ console.log(rawResult.lines);
 await engine.close();
 ```
 
-Apple provider 仍需显式启用。下面是面向维护者/源码 checkout 的 preview，不是 `0.2.0` 的 `npm install` 使用路径；它假设已经按照[构建与发布](docs/build-and-release.md#8-ci)中的本机 release tooling 派生出锁定的自包含 Apple bundle。请求 Apple 路径时应保留可观测的整 session CPU fallback：
+当前源码候选通过平台 runtime descriptor 执行 Auto 选择；显式 Apple 仍可作为严格的单 provider 请求。下面是面向维护者/源码 checkout 的 preview，不是 `0.2.0` 的 `npm install` 使用路径；它假设已经按照[构建与发布](docs/build-and-release.md#8-ci)中的本机 release tooling 派生出锁定的自包含 Apple bundle：
 
 ```ts
 const engine = await createEngine({
@@ -156,14 +156,14 @@ const engine = await createEngine({
     provider: "apple",
     precision: "fp16",
     cpuPartition: "allow",
-    sessionFallback: "cpu",
+    sessionFallback: "error",
   },
 });
 
 console.log(engine.info.execution.sessions.detection.deviceValidated);
 ```
 
-`cpuPartition: "allow"` 同时适用于 Apple Silicon 和 Intel Mac；strict GPU-only profile 只支持 Apple Silicon。普通 npm 用户应在 Apple payload 正式发布前继续使用默认 CPU provider。
+`cpuPartition: "allow"` 同时适用于 Apple Silicon 和 Intel Mac；strict GPU-only profile 只支持 Apple Silicon。显式 provider 失败不会转入 CPU，只有 Auto 可以沿 descriptor 锁定的创建候选继续。源码候选发布前，公开的 `0.2.0` package 仍保持 CPU 默认。
 
 完整 API、取消、队列限制和生命周期行为见 [Node.js 指南](bindings/node/README.md)。
 
