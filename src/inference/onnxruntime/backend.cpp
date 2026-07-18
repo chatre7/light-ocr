@@ -86,6 +86,25 @@ WebGpuRegistrationState& webgpu_registration_state() {
   return state;
 }
 
+#if !defined(_WIN32)
+bool linux_drm_render_node_available() {
+  std::error_code error;
+  std::filesystem::directory_iterator iterator(
+      "/dev/dri", std::filesystem::directory_options::skip_permission_denied,
+      error);
+  const std::filesystem::directory_iterator end;
+  while (!error && iterator != end) {
+    const auto filename = iterator->path().filename().string();
+    if (filename.rfind("renderD", 0) == 0) {
+      const auto status = iterator->symlink_status(error);
+      if (!error && std::filesystem::is_character_file(status)) return true;
+    }
+    iterator.increment(error);
+  }
+  return false;
+}
+#endif
+
 std::filesystem::path loaded_onnxruntime_directory() {
 #if defined(_WIN32)
   const auto module = GetModuleHandleW(L"onnxruntime.dll");
@@ -173,6 +192,13 @@ std::filesystem::path webgpu_library_path(
 
 std::vector<Ort::ConstEpDevice> webgpu_devices(
     const InferenceSessionConfig& config) {
+#if !defined(_WIN32)
+  if (!linux_drm_render_node_available()) {
+    throw WebGpuSetupError(
+        CreationReason::adapter_unavailable,
+        "The Linux WebGPU provider requires an accessible DRM render node");
+  }
+#endif
   const auto library = webgpu_library_path(
       config.webgpu_provider_library, config.webgpu_provider_bytes,
       config.webgpu_provider_sha256);
@@ -371,10 +397,27 @@ void add_webgpu_session_config_entries(Ort::SessionOptions& options) {
 
 #if defined(LIGHT_OCR_HAS_WEBGPU) && \
     defined(LIGHT_OCR_WEBGPU_QUALIFICATION_BUILD)
+std::string webgpu_profile_prefix() {
+#if defined(_WIN32)
+  char* value = nullptr;
+  std::size_t length = 0;
+  std::string result;
+  if (_dupenv_s(&value, &length, "LIGHT_OCR_WEBGPU_PROFILE_PREFIX") == 0 &&
+      value != nullptr && length > 1) {
+    result.assign(value, length - 1);
+  }
+  std::free(value);
+  return result;
+#else
+  const auto* value = std::getenv("LIGHT_OCR_WEBGPU_PROFILE_PREFIX");
+  return value == nullptr ? std::string{} : std::string{value};
+#endif
+}
+
 void enable_webgpu_qualification_profile(Ort::SessionOptions& options,
                                          ModelKind kind) {
-  const auto* configured = std::getenv("LIGHT_OCR_WEBGPU_PROFILE_PREFIX");
-  if (configured == nullptr || configured[0] == '\0') return;
+  const auto configured = webgpu_profile_prefix();
+  if (configured.empty()) return;
   auto prefix = std::filesystem::u8path(configured);
   if (!prefix.is_absolute()) {
     throw std::invalid_argument(

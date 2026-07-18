@@ -347,13 +347,14 @@ int main() {
       return 1;
     }
 
-    auto make_engine = [&bundle_files]() {
+    auto make_engine = [&bundle_files, &integration_options]() {
       auto next_bundle = light_ocr::ModelBundle::create(bundle_files);
       if (!next_bundle) {
         return light_ocr::Result<std::unique_ptr<light_ocr::Engine>>::failure(
             next_bundle.error());
       }
-      return light_ocr::Engine::create(std::move(next_bundle).value());
+      return light_ocr::Engine::create(std::move(next_bundle).value(),
+                                       integration_options);
     };
     auto first = make_engine();
     auto second = make_engine();
@@ -381,7 +382,7 @@ int main() {
     }
 
     auto invalid_bundle = light_ocr::ModelBundle::create(bundle_files);
-    light_ocr::EngineOptions invalid_options;
+    light_ocr::EngineOptions invalid_options = integration_options;
     invalid_options.intra_op_threads = 0;
     auto invalid_engine = light_ocr::Engine::create(
         std::move(invalid_bundle).value(), invalid_options);
@@ -391,7 +392,7 @@ int main() {
     }
 
     auto invalid_execution_bundle = light_ocr::ModelBundle::create(bundle_files);
-    light_ocr::EngineOptions invalid_execution_options;
+    light_ocr::EngineOptions invalid_execution_options = integration_options;
     invalid_execution_options.execution.device_id = 0;
     auto invalid_execution_engine = light_ocr::Engine::create(
         std::move(invalid_execution_bundle).value(), invalid_execution_options);
@@ -403,7 +404,7 @@ int main() {
     }
 
     auto exact_bundle = light_ocr::ModelBundle::create(bundle_files);
-    light_ocr::EngineOptions exact_options;
+    light_ocr::EngineOptions exact_options = integration_options;
     exact_options.detection.strategy = light_ocr::DetectionStrategy::upstream_exact;
     exact_options.recognition_batch_size = 8;
     auto exact_engine = light_ocr::Engine::create(
@@ -419,7 +420,7 @@ int main() {
     exact_engine.value()->close();
 
     auto tiled_bundle = light_ocr::ModelBundle::create(bundle_files);
-    light_ocr::EngineOptions tiled_options;
+    light_ocr::EngineOptions tiled_options = integration_options;
     tiled_options.detection.strategy = light_ocr::DetectionStrategy::tiled;
     auto tiled_engine = light_ocr::Engine::create(
         std::move(tiled_bundle).value(), tiled_options);

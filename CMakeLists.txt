@@ -202,6 +202,10 @@ if(LIGHT_OCR_BUILD_TESTS)
   target_link_libraries(light_ocr_unit_tests PRIVATE light_ocr::core nlohmann_json::nlohmann_json
     opencv_core opencv_imgproc)
   target_include_directories(light_ocr_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+  if(LIGHT_OCR_HAS_WEBGPU AND LIGHT_OCR_WEBGPU_QUALIFICATION_BUILD)
+    target_compile_definitions(light_ocr_unit_tests PRIVATE
+      LIGHT_OCR_WEBGPU_QUALIFICATION_BUILD=1)
+  endif()
   light_ocr_stage_onnxruntime(light_ocr_unit_tests)
   add_test(NAME light_ocr_unit_tests COMMAND light_ocr_unit_tests)
 

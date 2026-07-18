@@ -150,8 +150,10 @@ python3 tools/webgpu/qualify.py \
 ```
 
 Windows requires a current D3D12 graphics driver and the Microsoft Visual C++
-2015-2022 x64 runtime used by the official binaries. Linux requires a working
-Vulkan loader and vendor driver. The Gate records Windows driver identity via
+2015-2022 x64 runtime used by the official binaries. Linux requires an
+accessible `/dev/dri/renderD*` node, a working Vulkan loader, and a vendor
+driver; an absent render node is classified as typed `adapter_unavailable`
+before Dawn is loaded. The Gate records Windows driver identity via
 PowerShell/CIM and Linux identity via DRM sysfs (plus `vulkaninfo --summary`
 when available); absence of a driver identity fails the report. No CUDA, ROCm,
 OpenVINO, Python inference runtime, or source compiler is a product runtime

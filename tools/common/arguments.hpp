@@ -51,12 +51,15 @@ inline PixelFormat parse_format(const std::string& value) {
 inline EngineOptions engine_options_for_profile(const std::string& profile) {
   EngineOptions options;
   if (profile == "cpu_fast") {
+    options.execution.provider = ExecutionProvider::cpu;
     options.intra_op_threads = std::max(
         1u, std::min(12u, std::thread::hardware_concurrency()));
   } else if (profile == "upstream_exact") {
+    options.execution.provider = ExecutionProvider::cpu;
     options.detection.strategy = DetectionStrategy::upstream_exact;
     options.recognition_batch_size = 8;
   } else if (profile == "tiled_v1") {
+    options.execution.provider = ExecutionProvider::cpu;
     options.detection.strategy = DetectionStrategy::tiled;
   } else if (profile == "apple_interactive" ||
              profile == "apple_strict" ||
