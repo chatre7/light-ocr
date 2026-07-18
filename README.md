@@ -20,6 +20,8 @@ It is made for products where OCR should feel like a local capability: quick to 
 
 > **Apple acceleration on `main`:** the upcoming `0.2.1` source candidate adds an opt-in Direct Core ML path for macOS 15+. Across two locked workloads on the qualified Apple M4 Max, it delivered a **2.30×–2.85× warm end-to-end speedup** over the 12-thread CPU profile while reducing OCR process CPU time by **95.91%–97.67%**. This provider is not included in the published `0.2.0` npm packages yet.
 
+> **Native WebGPU candidate in PR #11:** Linux x64/Vulkan and Windows x64/D3D12 now have a self-contained, reproducible source implementation built on ONNX Runtime 1.24.4 and the official WebGPU Plugin EP 0.1.0. Provider registration, Auto fallback, runtime descriptors, npm staging, offline integrity checks, and hardware-independent tests are implemented. Real-device qualification is still pending on Linux and Windows, so no compatibility or speedup claim is made and the provider is not included in published `0.2.0` packages.
+
 ## Where light-ocr fits
 
 | Use case | What light-ocr provides |
@@ -44,6 +46,7 @@ Cloud OCR is convenient, but it introduces uploads, network availability, recurr
 - **Ready for real application pipelines.** It accepts `GRAY8`, `RGB8`, `BGR8`, and `RGBA8` pixel buffers; the Node.js adapter can also decode JPEG and PNG bytes already held in memory.
 - **Two deliberate large-image modes.** Bounded/960 remains the fast, memory-conscious default. Opt-in tiled detection preserves more detail for small text and dense 2048-pixel documents while processing one detection tile at a time.
 - **Native Apple acceleration when requested.** The `0.2.1` source candidate can route FP16 detection and recognition through Core ML without changing the default CPU behavior or the public OCR result contract.
+- **A reproducible Native WebGPU candidate.** PR #11 packages the official WebGPU Plugin EP and its exact Linux/Vulkan or Windows/D3D12 runtime closure, with hash-verified offline staging and a one-command real-device qualification suite.
 - **A pinned, reproducible model.** The approximately 31 MB PP-OCRv6 Small bundle is integrity-checked and designed to ship with the application instead of downloading on first use.
 - **Consistent across supported platforms.** The same model and result contract are used on macOS, Linux, and Windows.
 - **Built for asynchronous hosts.** The Node-API adapter keeps inference away from the JavaScript thread, with bounded queues, cancellation, and explicit lifecycle control.
@@ -197,9 +200,11 @@ The npm distribution installs one facade, one required model package, and the na
 
 Direct Core ML acceleration is merged on `main` for the `0.2.1` candidate but is not part of the published `0.2.0` package set. Its release keeps the same six-package installation shape; no extra provider package or runtime download is planned.
 
+PR #11 also carries the Linux x64 and Windows x64 Native WebGPU source candidate. Its npm payload remains release-gated until both real-device qualification reports are reviewed; published `0.2.0` packages remain unchanged and CPU-only on those platforms.
+
 ## Project status
 
-`light-ocr` is under active development. Version `0.2.0` publishes the deterministic `tiled-v1` high-resolution mode and bounded in-memory JPEG/PNG decoding in the Node.js adapter without changing the raw-pixel C++ Core boundary. The current `0.2.1` source candidate adds opt-in Direct Core ML execution on macOS while preserving CPU as the default.
+`light-ocr` is under active development. Version `0.2.0` publishes the deterministic `tiled-v1` high-resolution mode and bounded in-memory JPEG/PNG decoding in the Node.js adapter without changing the raw-pixel C++ Core boundary. Current source candidates add opt-in Direct Core ML execution on macOS and Native WebGPU execution on Linux x64/Windows x64. Platform Auto defaults and release support remain gated by their respective qualification evidence.
 
 As a pre-1.0 project, public APIs and package layout may still evolve; the project does not currently promise a stable cross-release C++ ABI.
 

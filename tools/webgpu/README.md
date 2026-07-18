@@ -1,99 +1,163 @@
-# Linux WebGPU runtime product contract
+# Native WebGPU product runtime
 
-This directory implements **WGPU-001**: a reproducible build contract for the
-Linux x86_64 glibc WebGPU runtime. It does not connect WebGPU to light-ocr,
-change the current CPU dependency, stage npm packages, or claim that the Linux
-Provider Gate has passed.
+This directory owns the reproducible Linux x64 and Windows x64 Native WebGPU
+runtime, its release gate, and the real-device qualification runner. Product
+integration is complete in the current source candidate; production release is
+intentionally blocked until both platform reports are reviewed and bound to the
+exact artifact sets in `runtime-lock.json`.
 
-## Frozen topology
+## Frozen runtime
 
-- ONNX Runtime `v1.23.0` at commit
-  `be835efc56aca19b8e810538ec93c8e150e0fc61`.
-- One monolithic `libonnxruntime` containing the CPU and Native WebGPU
-  providers. There is no separate provider plugin.
-- Dawn Native revision `9733be39e18186961d503e064874afe3e9ceb8d1`,
-  locked by ONNX Runtime's `cmake/deps.txt`, with Vulkan as the only graphics
-  backend.
-- Release shared library with SONAME `libonnxruntime.so.1`, `$ORIGIN` RUNPATH,
-  and the dynamic-dependency allowlist in `runtime-lock.json`.
+The product uses the official ONNX Runtime plugin topology:
 
-The earlier inference-only proof of concept used this ORT/Dawn source topology.
-Its binary hash remains evidence only: the production hash is deliberately
-unset until a release builder produces and qualifies an artifact.
+- `Microsoft.ML.OnnxRuntime` `1.24.4` supplies the C/C++ headers and core
+  runtime.
+- `Microsoft.ML.OnnxRuntime.EP.WebGpu` `0.1.0` supplies the official
+  `WebGpuExecutionProvider` plugin built from upstream tag
+  `plugin-ep-webgpu/v0.1.0` at commit
+  `d2ede0adeb300958cfb5a256c09d27c66c3a6d71`.
+- Linux x64 glibc uses Dawn Native over Vulkan. Windows x64 uses Dawn Native
+  over D3D12 and carries the plugin's `dxcompiler.dll` and `dxil.dll`.
+- The fixed session policy is NHWC, basic validation, graph capture disabled,
+  high-performance power preference, FP32, and no public adapter ordinal.
 
-## Prerequisites
+Every NuGet URL, byte count, SHA-512, ZIP member, staged path, license, header,
+and platform identity is locked. The assembler rejects duplicate ZIP members,
+unsafe paths, symlinks, missing or extra files, hash drift, and mismatched
+manifests. It builds no upstream source and never discovers an unpinned system
+ORT/plugin.
 
-The build host must be Linux x86_64 with glibc. It needs Python 3, Git, CMake,
-Ninja, `readelf`, a C/C++ toolchain, and the development prerequisites required
-by ONNX Runtime and Dawn. Network access is required when the tool fetches the
-source and upstream dependency archives. It never fetches a GPU driver; the
-host supplies the normal Vulkan loader and driver.
+## Assemble and verify
 
-Validate the lock without network access or a build:
-
-```bash
-python3 tools/webgpu/build_runtime.py --validate-lock
-```
-
-Build with a fresh source checkout under the ignored cache directory:
+Online acquisition followed by an offline replay:
 
 ```bash
 python3 tools/webgpu/build_runtime.py \
-  --work-dir .cache/webgpu-runtime \
-  --output-dir dist/webgpu-runtime \
-  --jobs 8
+  --platform linux-x64 \
+  --package-cache .cache/webgpu-runtime/packages \
+  --output-dir dist/webgpu-sdk/linux-x64
+
+python3 tools/webgpu/build_runtime.py \
+  --validate-sdk dist/webgpu-sdk/linux-x64
+
+python3 tools/webgpu/build_runtime.py \
+  --platform windows-x64 \
+  --offline \
+  --package-cache .cache/webgpu-runtime/packages \
+  --output-dir dist/webgpu-sdk/windows-x64
 ```
 
-A previously checked-out tree can be reused only when it is clean and exactly
-at the locked commit:
+The two locked NuGet packages contain both platforms, so one verified package
+cache can assemble either SDK on Linux, Windows, or a review host. An output
+directory must not already exist and is published atomically only after all
+checks pass.
+
+## CMake and package boundary
+
+Use the verified SDK explicitly:
 
 ```bash
-python3 tools/webgpu/build_runtime.py \
-  --source-dir /path/to/onnxruntime \
-  --work-dir .cache/webgpu-runtime \
-  --output-dir dist/webgpu-runtime
+cmake -S . -B build-webgpu -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLIGHT_OCR_DEPENDENCY_CACHE_DIR="$PWD/.cache/dependencies" \
+  -DLIGHT_OCR_ONNXRUNTIME_FLAVOR=webgpu \
+  -DLIGHT_OCR_WEBGPU_SDK_DIR="$PWD/dist/webgpu-sdk/linux-x64" \
+  -DLIGHT_OCR_WEBGPU_QUALIFICATION_BUILD=ON
 ```
 
-The output directory is published atomically and must not already exist. It is
-a matching C++ SDK containing `include/`, the versioned library and two relative
-SONAME/linker-name symlinks under `lib/`, plus `artifact-manifest.json`. The
-headers and runtime always come from the same exact ONNX Runtime checkout. The
-manifest records every regular SDK file's byte count and SHA-256, a deterministic
-header-set identity, source revisions, exact upstream build arguments, runtime
-flavor, qualification state, and the locked session options. Artifact validation
-fails on an unexpected SONAME, RUNPATH, dependency, header, or source identity.
+CMake revalidates the exact SDK inventory and every file hash before exposing
+headers or link inputs. A qualification build may consume the current pending
+lock. A normal release build requires `production-qualified`, both accepted
+Provider Gates, and a platform artifact-set hash matching the assembled SDK.
 
-The C++ integration uses the locked generic provider API with provider name
-`WebGPU`, Vulkan, NHWC, graph capture disabled, and basic validation. `deviceId`
-is intentionally unsupported in the first product contract because ORT 1.23
-interprets it as an externally injected WebGPU context ID, not a GPU ordinal.
+The staged Node package is self-contained:
 
-CMake consumes this SDK only when `LIGHT_OCR_ONNXRUNTIME_FLAVOR=webgpu` and an
-explicit `LIGHT_OCR_WEBGPU_SDK_DIR` are supplied. `bootstrap_dependencies.py`
-does not download WebGPU from `models/deps.lock.json`; it reports this external,
-verified-SDK boundary and points to this builder instead. Native builds verify
-glibc from compiler headers. A verified cross toolchain must explicitly set
-`LIGHT_OCR_TARGET_LIBC=glibc`; any other value is rejected.
+- Linux: addon, `libonnxruntime.so.1`, and
+  `libonnxruntime_providers_webgpu.so`.
+- Windows: addon, `onnxruntime.dll`, WebGPU plugin, `dxcompiler.dll`, and
+  `dxil.dll`.
+- Both: schema 2 runtime descriptor, per-file bytes/SHA-256, licenses, SPDX
+  SBOM, and release artifact hashes.
 
-CMake re-hashes every declared public header, verifies both relative symlink
-targets, and freezes the exact runtime and session-option identity before use. A
-pending artifact is accepted only with `LIGHT_OCR_WEBGPU_QUALIFICATION_BUILD=ON`.
-Normal release configuration and npm staging both require the manifest's exact
-production hash, `productionArtifactQualified=true`, and accepted Provider Gate;
-the current proof-of-concept manifest deliberately cannot satisfy that gate.
+The loader accepts no undeclared native file or symlink and rechecks the
+provider library immediately before registration. Auto is descriptor-owned and
+ordered `webgpu -> cpu`; only a typed D112 skippable creation reason may reach
+CPU. Explicit WebGPU never falls back. Unknown Dawn/ORT loading failures remain
+fatal and are never classified by parsing exception text.
 
-## Qualification boundary
+## Hardware-independent checks
 
-The current evidence is one Linux x64 NVIDIA/Vulkan inference-only run. The
-detector was fully placed on WebGPU, but recognition placed `Slice.2`,
-`Concat.2`, and `Gather` on CPU; recognition therefore fails with
-`cpuPartition=forbid`. This contract does not accept that partition for a
-Preview and does not replace the required end-to-end, cross-vendor Provider
-Gate.
+```bash
+python3 -m unittest \
+  tests.python.test_webgpu_runtime \
+  tests.python.test_npm_release \
+  tests.python.test_webgpu_qualification
+```
 
-Downstream work must separately add dependency bootstrap/platform filtering,
-select the runtime flavor in CMake, support multi-file npm runtime descriptors,
-generate license/SBOM metadata without a NuGet assumption, connect provider
-creation and D112 Auto selection, and add GPU qualification CI. The current
-CPU-only `cmake/Dependencies.cmake` and `models/deps.lock.json` intentionally
-remain unchanged in WGPU-001.
+`.github/workflows/webgpu-native.yml` repeats those tests on Linux and Windows,
+assembles the real SDK online and offline, compiles C++ and Node against ORT
+1.24.4, runs CPU-only integration coverage, loads the staged addon from a
+sterile directory, and generates licenses/SBOM plus a qualification-only native
+package. It does not claim physical GPU placement.
+
+## Real-device Provider Gate
+
+Run this command on a Linux x64 glibc GPU host or Windows x64 GPU host from a
+clean checkout of the exact candidate revision:
+
+```bash
+python3 tools/webgpu/qualify.py
+```
+
+The runner bootstraps pinned dependencies/models, assembles and validates the
+host SDK, builds the qualification addon and C++ tools, runs hardware-independent
+CTest, stages the exact npm payload, and then exercises:
+
+- Node CPU, WebGPU allow, WebGPU strict, and D112 Auto;
+- direct C++ D112 Auto and adjacent-plugin discovery;
+- the complete locked 14-fixture parity/quality corpus, including sparse,
+  dense, multilingual, rotated, handwriting, and low-contrast inputs;
+- deterministic repeated inference and 20 engine create/close cycles;
+- CPU-vs-WebGPU text, confidence, and box parity;
+- per-fixture P95 regression, aggregate P50 speedup, cold-start, and 2 GiB
+  resident-memory ceilings fixed before device results are observed;
+- ORT profiling evidence for real `WebGpuExecutionProvider` node placement,
+  including zero CPU nodes in strict mode.
+
+Outputs are written to
+`reports/webgpu-qualification/<platform>/qualification-report.json` with a
+sidecar SHA-256, raw cases, profiles, and command logs. A nonzero exit means at
+least one Provider Gate failed; the report is still retained.
+
+The production Gate is fixed to all 14 fixtures, at least 10 measured runs per
+normal case, and 20 create/close lifecycle cycles. Reduced `--fixture`,
+`--iterations`, or `--cycles` values remain useful for diagnosis, but the
+resulting report cannot set `passed: true` and cannot qualify a release.
+
+Useful options:
+
+```bash
+# Reuse a complete prior build and rerun only device evidence.
+python3 tools/webgpu/qualify.py --skip-build
+
+# Fully offline rebuild after caches and Node development files exist.
+python3 tools/webgpu/qualify.py --offline
+
+# Use distribution-provided Node headers; Windows also passes node.lib.
+python3 tools/webgpu/qualify.py \
+  --offline \
+  --node-include-dir /absolute/path/to/include/node
+```
+
+Windows requires a current D3D12 graphics driver and the Microsoft Visual C++
+2015-2022 x64 runtime used by the official binaries. Linux requires a working
+Vulkan loader and vendor driver. The Gate records Windows driver identity via
+PowerShell/CIM and Linux identity via DRM sysfs (plus `vulkaninfo --summary`
+when available); absence of a driver identity fails the report. No CUDA, ROCm,
+OpenVINO, Python inference runtime, or source compiler is a product runtime
+prerequisite.
+
+Do not edit the pending qualification fields from a successful exit code alone.
+Both reports must be reviewed for device identity, placement, quality,
+performance, memory, lifecycle, and supported compatibility scope before their
+hashes and artifact-set identities can enter the production lock.

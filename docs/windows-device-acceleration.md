@@ -1,8 +1,8 @@
 # Windows Device 加速技术方案
 
-状态：Accepted direction, implementation pending；WebGPU 已选为 Windows x64 通用加速主线，不代表已经通过 PG 或发布
+状态：产品实现与硬件无关验证已完成，Windows x64 真实 D3D12 GPU Provider Gate 待执行；production lock 与 released Auto 仍保持关闭
 
-更新时间：2026-07-16
+更新时间：2026-07-18
 
 范围：当前交付目标是 Windows x64；Windows arm64 及 Qualcomm NPU 属于后续平台决策
 
@@ -171,12 +171,12 @@ DirectML/ORT DML EP 的优势是 DirectX 12 GPU 广覆盖；它可以覆盖 Inte
 
 ### 3.5 可复用边界与最小自研量
 
-当前不存在一个可以直接塞进 `@arcships/light-ocr` 的完整上游 Windows provider package，但所有路径都只替换 inference backend，继续复用现有 preprocess、DB postprocess、crop/sort、CTC decode、资源限制和结果契约。开发阶段可以安装厂商 SDK 做对照；发布阶段必须把通过 Gate 的 runtime/EP 转为自包含 payload。
+当前源码已经把 official WebGPU provider package 转为完整自包含 Windows qualification payload：ORT Core 1.24.4、WebGPU plugin 0.1.0、`dxcompiler.dll`、`dxil.dll`、addon、schema 2 descriptor、licenses、SPDX SBOM 和 artifact hashes 全部随包。它只替换 inference backend，继续复用现有 preprocess、DB postprocess、crop/sort、CTC decode、资源限制和结果契约。其他厂商路径仍可在开发环境做对照，但发布时同样必须转为固定、自包含 payload。
 
-实施顺序：
+已实现与待验证边界：
 
-1. **Native WebGPU FP32 qualification：** 固定兼容 ORT Core、WebGPU plugin 与 Dawn/D3D12 依赖；用当前 detector/recognizer bytes 验证严格 placement、动态 shape、copy、质量、CPU-s、驱动和包体。
-2. **Windows Auto qualification：** 按 D112 验证 `webgpu → cpu` 的创建期原子选择、四类可跳过原因、致命包错误、完整尝试链和运行期冻结。正式 WebGPU Gate 始终使用显式 provider，防止 Auto 掩盖失败。
+1. **Native WebGPU FP32 实现完成：** ORT/plugin 与 Dawn/D3D12 companion 已精确锁定，C++/Node allow/strict、profiling、descriptor、npm staging 与 offline verifier 已接线；真机必须验证 placement、动态 shape、质量、CPU-s、driver、内存和收益。
+2. **Windows Auto 实现完成：** D112 `webgpu → cpu`、固定路径 plugin load、typed adapter absence、fatal package/hash/load、完整 trace 与运行期冻结已实现；真机 Auto 必须实际选择 WebGPU，不能把 CPU fallback 当作成功。
 3. **专用后端启动 Gate：** 仅当 WebGPU 在预注册设备/workload 上失败或专用路径的用户加权收益足够时，才启动 DirectML、OpenVINO、TensorRT RTX、MIGraphX 或 VitisAI Spike。
 4. **厂商模型派生：** 需要 FP16/QDQ/BF16 时使用独立 model ID/hash、calibration、shape profile、quality Gate 与 context-cache 生命周期，不重写 OCR 算法。
 
@@ -186,7 +186,7 @@ DirectML/ORT DML EP 的优势是 DirectX 12 GPU 广覆盖；它可以覆盖 Inte
 
 | Windows 设备 | 候选 provider | 首选初始精度 | 当前项目状态 | 主要约束 |
 | --- | --- | --- | --- | --- |
-| 具备合格 D3D12/Vulkan adapter 的 x64 GPU | Native WebGPU | 当前 FP32 原样验证 | Windows 通用主线；尚待 Windows 真机 PG 与发布制品 | WebGPU kernel/shape、Dawn、driver、copy、包体 |
+| 具备合格 D3D12 adapter 的 x64 GPU | Native WebGPU | 当前 FP32 原样验证 | 产品实现、qualification package 与 CI 已完成；尚待 Windows 真机 PG | WebGPU kernel/shape、Dawn、driver、copy、包体 |
 | 任意兼容 DirectX 12 的 x64 GPU | DirectML | 当前 FP32 原样验证；FP16 后续 | 专用兼容性备选，等待启动 Gate | legacy；固定 shape；同 session 串行 |
 | Intel 12th Gen+ GPU | OpenVINO GPU | FP16 | x64 候选 | 需要对应 runtime/driver；验证完整 graph |
 | Intel Core Ultra NPU | OpenVINO NPU | FP16；INT8/QDQ 后续 | x64 交互式 NPU 候选 | NPU operator/shape coverage；不能接受隐藏 CPU fallback |
@@ -258,10 +258,10 @@ Provider-specific 量化模型如果改变输入/输出 dtype、scale 或 zero-p
 
 ### 5.2 推荐 runtime 选择
 
-当前首选 runtime spike 是 **pinned ORT Core + Native WebGPU plugin + Dawn**，以 Windows x64 私有目录自包含交付。Windows ML 2.x / DirectML 保留为专用备选对照：
+当前产品 runtime 已选择 **pinned ORT Core 1.24.4 + Native WebGPU plugin 0.1.0 + Dawn/D3D12 companions**，以 Windows x64 私有目录自包含交付。Windows ML 2.x / DirectML 保留为专用备选对照：
 
 - WebGPU 与 Linux 共享 provider API 和 ONNX 模型资格方法，在 Windows 由 Dawn 映射 D3D12/Vulkan；
-- runtime/plugin/Dawn 必须精确锁定，不依赖系统安装的 ORT、SDK 或动态 catalog；
+- NuGet URL/catalog、bytes/SHA-512、plugin upstream tag/commit、headers、DLL paths、licenses 与 session options 已精确锁定，不依赖系统安装的 ORT、SDK 或动态 catalog；
 - Windows ML 的 EP ABI 仍可承载通过专用 Gate 的 vendor plugin，但不决定通用默认；
 - 所有方案都与现有 ONNX model 和 backend-neutral session 边界保持一致。
 
@@ -372,7 +372,8 @@ Windows interactive profile 初始仍保持一个 engine 一个 active call：
 
 规则：
 
-- Self-contained Windows ML/runtime 和 EP plugin 精确锁定版本；升级必须重新跑全部 Gate。
+- 当前 WebGPU qualification package 精确包含 `light_ocr_node.node`、`onnxruntime.dll`、`onnxruntime_providers_webgpu.dll`、`dxcompiler.dll` 与 `dxil.dll`；descriptor 的 exact inventory、bytes 和 SHA-256 在 addon 加载前复核，provider DLL 在注册前再复核。
+- Self-contained runtime 和 EP plugin 精确锁定版本；升级必须重新跑全部 Gate。
 - Vendor EP 的 driver minimum/maximum、GPU/NPU family、Windows build 和 ORT ABI 写入 manifest。
 - Cache key 至少包含 model hash、provider/ORT version、precision、shape policy、device/driver compatibility key。
 - Cache 路径不能使用不安全的全局临时目录；必须有大小上限、权限检查、原子写入和损坏恢复。
@@ -381,6 +382,7 @@ Windows interactive profile 初始仍保持一个 engine 一个 active call：
 - 默认 Windows package 不以“支持越多越好”为目标。每个 vendor payload 必须分别披露压缩下载、解包大小、DLL 数、license 和 CVE/升级责任；未通过 package-size Gate 就不进入默认 release set。
 - 禁止 install/postinstall 下载 runtime、根据本机 GPU 现场编译 provider、访问厂商安装器，或从全局 DLL 搜索路径借用未锁定组件。
 - Release qualification 必须在没有 Paddle、Python、CUDA toolkit、TensorRT SDK、OpenVINO SDK、Ryzen AI SDK 和 QNN SDK 的干净 VM 上，从 npm tarball 离线安装并运行。目标机只允许预装操作系统和正常硬件 driver。
+- Official Windows binaries 依赖 Microsoft Visual C++ 2015-2022 x64 runtime；这是与 D3D12 driver 同级的明确系统前置条件，不从 PATH 借用项目 runtime。
 - Dynamic catalog、Windows Update 和 framework-dependent runtime 如未来开放，必须是宿主明确选择的另一种分发 profile，不能改变稳定 self-contained 语义。
 
 ## 10. 公共策略与可观测性
@@ -437,11 +439,11 @@ Windows 与 Apple 使用同一份用户可读 scoreboard：
 
 Windows provider 继承 Roadmap PG，并增加以下要求：
 
-- 至少两个目标 workload 达到 Roadmap 的端到端 speedup/throughput 门槛；
-- 相对同机 CPU-fast，OCR process CPU-s 至少下降 80%；
+- 默认 one-command suite 覆盖锁定 14-fixture corpus；至少两个 fixture P50 speedup ≥1.5，P50 总和 speedup ≥1.1，任一 fixture WebGPU P95 ≤CPU 3×；
+- OCR process CPU-s/average cores 进入报告和发布范围审查，不使用 runner 未强制的目标冒充自动 Gate；
 - qualification 中禁止未声明 CPU EP fallback，关键 graph placement 达到预注册要求；
 - 公共 contract 100% 通过，FP16/INT8/BF16 的质量容差在查看最终性能前锁定；
-- cold compile、cache hit、RSS/VRAM、包增量和 driver/OS 矩阵通过预注册 ceiling；
+- canary initialization + first result ≤30 s、resident maximum ≤2 GiB、20 次 lifecycle retained growth 绝对值 ≤128 MiB；device memory/driver 范围由真机报告补充；
 - device unavailable、driver 不兼容、cache 损坏、device lost 和 session failure 都有稳定行为；
 - Windows platform/provider payload 保持完全离线，dynamic catalog profile 除外且必须由宿主显式授权。
 
@@ -449,18 +451,18 @@ Windows provider 继承 Roadmap PG，并增加以下要求：
 
 ### Phase A — Native WebGPU Windows qualification
 
-- 固定 ORT Core、WebGPU plugin、Dawn/D3D12 backend、artifact hashes 与两台跨厂商 GPU。
-- 用当前 FP32 ONNX 验证 detector/recognizer 算子、shape、严格 placement、CPU partition、质量、CPU-s、cold start、RSS/VRAM 和包体。
-- 从本地 npm tarball 组装 Windows payload；在不安装任何厂商 SDK/runtime 的干净 VM 上验证完全离线运行。
-- 正式 Gate 使用显式 `provider=webgpu`，避免 Auto 隐藏失败。
+- 已固定 ORT Core 1.24.4、WebGPU plugin 0.1.0、Dawn/D3D12 companion、artifact hashes 与 qualification identity。
+- 已实现当前 FP32 detector/recognizer 的 allow/strict、Auto、C++/Node diagnostics、profiling 和 14-fixture one-command runner。
+- 已实现从实际 payload 生成的 npm descriptor、license/SBOM、sterile cwd load 和离线 runtime/package cache 复装。
+- 待用户在真实 Windows GPU 上运行 Gate；显式 allow/strict 证明 placement，Auto 必须实际选择 WebGPU。
 
 退出条件：WebGPU 得到接受、缩减或拒绝结论；未通过前 released Auto policy 仍只包含实际已交付候选。
 
 ### Phase B — D112 Auto 与自包含 Preview
 
-- 实现 Windows `webgpu → cpu` 创建期原子候选链、typed 失败分类和同构 selection trace：成功位于 `EngineInfo`，失败位于结构化 creation error。
-- 验证部分 session 清理、致命包错误停止、显式 provider 不回退、旧 `sessionFallback=cpu` 被拒绝，以及 Run/device-lost 不切换 backend。
-- 将通过 Gate 的 runtime、plugin、Dawn、license、SBOM、compatibility manifest 和由实际 staged payload 生成的 runtime descriptor 纳入现有 Windows platform package。
+- Windows `webgpu → cpu` 创建期原子候选链、typed 失败分类和同构 selection trace 已实现。
+- hardware-independent tests 已验证致命 descriptor/artifact 错误停止、显式 provider 不回退、旧 `sessionFallback=cpu` 被拒绝；真机继续验证 adapter、session close 与运行期冻结。
+- Gate 通过后才把 report/artifact hashes 和 compatibility range 写入 production lock；否则保持 qualification-only 或拒绝。
 
 退出条件：WebGPU 被接受为 Windows 通用 Preview，且 Auto 行为可审计；否则记录缩减范围或拒绝证据。
 
@@ -481,17 +483,15 @@ Windows provider 继承 Roadmap PG，并增加以下要求：
 - 为 QNN HTP 生成独立 QDQ/context 模型并验证 Snapdragon X。
 - 不从 x64 DirectML/OpenVINO/VitisAI 结果推断 arm64 性能或质量。
 
-## 13. 仍需讨论的决策
+## 13. 仍需真机 Gate 决定的问题
 
-1. Windows Native WebGPU 使用哪个精确 ORT Core/plugin/Dawn patch 与 D3D12/Vulkan backend policy？
-2. WebGPU 的最低 Windows build、driver、feature/limit 与设备族如何写入 compatibility manifest？
-3. Recognition 若需要有限 CPU partition，最低 placement coverage 与产品文案如何锁定？
-4. Stable 是否完全禁止 Windows ML catalog 下载，还是未来提供宿主显式授权、与自包含路径分开的 profile？
-5. 哪些设备/workload 失败足以启动 DirectML 或厂商 backend，而不是缩减 WebGPU manifest？
-6. 第一批专用厂商设备实验室选择 Intel、NVIDIA 还是 AMD；依据必须来自 Perf-0 用户样本。
-7. Detector/recognition 使用多少固定 bucket，如何限制 session/context 的 RSS/VRAM？
-8. 单一 Windows platform package 的压缩下载、解包大小和 license ceiling 是多少；达到上限后，是拒绝新增 provider，还是接受主 facade 自动取得的内部 Windows shard？
-9. Windows arm64 何时进入 Tier 1，从而允许 QNN 成为实际产品路径？
+1. 用户的 Windows GPU/driver 是否通过 strict 与 allow placement、质量、冷启动、性能、RSS 和 lifecycle Gate？
+2. 最低 Windows build、D3D12 driver、feature/limit 与设备族如何写入 compatibility range？
+3. Recognition 若需要有限 CPU partition，是否接受 allow Preview，最低 placement coverage 与产品文案如何锁定？
+4. 单一 Windows platform package 的压缩下载、解包大小和实际用户收益是否值得默认携带 WebGPU？
+5. 哪些设备/workload 失败足以启动 DirectML 或厂商 backend，而不是缩减 WebGPU 范围？
+6. Stable 是否完全禁止 Windows ML catalog 下载，还是未来提供宿主显式授权、与自包含路径分开的 profile？
+7. Windows arm64 何时进入 Tier 1，从而允许 QNN 成为实际产品路径？
 
 ## 14. 与 Apple 方案的关键差异
 

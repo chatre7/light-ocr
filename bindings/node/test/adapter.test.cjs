@@ -126,14 +126,20 @@ test('validates runtime descriptor artifacts before native loading', () => {
         ? 'windows-x64'
         : 'linux-x64';
     const descriptor = {
-      schemaVersion: '1.0',
+      schemaVersion: '2.0',
       platform: {
         id: platformId,
         os: process.platform,
         architecture: machine,
         ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
       },
-      runtime: { flavor: 'cpu', kind: 'onnxruntime-cpu', version: '1.22.0', abi: 'onnxruntime-c-api-22' },
+      runtime: {
+        flavor: 'cpu',
+        kind: 'onnxruntime-cpu',
+        version: '1.22.0',
+        abi: 'onnxruntime-c-api-22',
+        artifacts: [record(runtime)],
+      },
       qualificationOnly: false,
       released: true,
       autoPolicy: {
@@ -187,7 +193,7 @@ test('validates runtime descriptor artifacts before native loading', () => {
 });
 
 test(
-  'validates WebGPU compatibility content against its runtime descriptor',
+  'validates the self-contained WebGPU plugin runtime descriptor',
   { skip: process.platform !== 'linux' || process.arch !== 'x64' },
   () => {
     const os = require('node:os');
@@ -198,33 +204,19 @@ test(
       fs.mkdirSync(native);
       const addon = path.join(native, 'light_ocr_node.node');
       const runtime = path.join(native, 'libonnxruntime.so.1');
-      const compatibilityPath = path.join(native, 'webgpu-compatibility.json');
+      const provider = path.join(native, 'libonnxruntime_providers_webgpu.so');
       fs.writeFileSync(addon, 'addon');
       fs.writeFileSync(runtime, 'webgpu-runtime');
+      fs.writeFileSync(provider, 'webgpu-provider');
       const record = (filename) => ({
         path: path.relative(directory, filename).replaceAll(path.sep, '/'),
         bytes: fs.statSync(filename).size,
         sha256: crypto.createHash('sha256').update(fs.readFileSync(filename)).digest('hex'),
       });
       const runtimeRecord = record(runtime);
-      const compatibility = {
-        schemaVersion: '1.0',
-        provider: 'webgpu',
-        platformId: 'linux-x64',
-        runtimeVersion: '1.23.0',
-        runtimeAbi: 'onnxruntime-c-api-23',
-        qualificationId: 'webgpu-poc-v1',
-        qualificationOnly: true,
-        released: false,
-        runtimeArtifact: {
-          bytes: runtimeRecord.bytes,
-          sha256: runtimeRecord.sha256,
-        },
-      };
-      fs.writeFileSync(compatibilityPath, `${JSON.stringify(compatibility)}\n`);
-      const compatibilityRecord = record(compatibilityPath);
+      const providerRecord = record(provider);
       const descriptor = {
-        schemaVersion: '1.0',
+        schemaVersion: '2.0',
         platform: {
           id: 'linux-x64',
           os: 'linux',
@@ -233,19 +225,21 @@ test(
         },
         runtime: {
           flavor: 'webgpu',
-          kind: 'onnxruntime-monolithic-webgpu',
-          version: '1.23.0',
-          abi: 'onnxruntime-c-api-23',
+          kind: 'onnxruntime-plugin-webgpu',
+          version: '1.24.4',
+          abi: 'onnxruntime-c-api-24-plugin-ep-0.1',
+          artifacts: [runtimeRecord, providerRecord],
         },
         qualificationOnly: true,
         released: false,
-        autoPolicy: { id: 'linux-x64-v1', version: 1, providers: ['cpu'] },
+        autoPolicy: { id: 'linux-x64-v1', version: 1, providers: ['webgpu', 'cpu'] },
         providers: {
           webgpu: {
             runtimeProvider: 'WebGpuExecutionProvider',
+            providerVersion: '0.1.0',
             qualificationId: 'webgpu-poc-v1',
-            compatibilityManifest: compatibilityRecord,
-            artifacts: [runtimeRecord, compatibilityRecord],
+            providerLibrary: providerRecord,
+            artifacts: [providerRecord],
           },
           cpu: {
             runtimeProvider: 'CPUExecutionProvider',
@@ -262,16 +256,14 @@ test(
         'webgpu',
       );
 
-      compatibility.runtimeAbi = 'onnxruntime-c-api-22';
-      fs.writeFileSync(compatibilityPath, `${JSON.stringify(compatibility)}\n`);
-      Object.assign(compatibilityRecord, record(compatibilityPath));
+      descriptor.providers.webgpu.providerLibrary.sha256 = '0'.repeat(64);
       fs.writeFileSync(descriptorPath, `${JSON.stringify(descriptor)}\n`);
       assert.throws(
         () => validateRuntimeDescriptor(descriptorPath),
         (error) =>
           error.name === 'OcrError' &&
           error.code === 'package_load_failed' &&
-          /compatibility manifest/.test(error.message),
+          /hash mismatch|library contract/.test(error.message),
       );
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
@@ -319,12 +311,22 @@ test('loads PP-OCRv6, snapshots pixels, maps results, and closes idempotently', 
   assert.equal(engine.info.executionProvider, 'CPUExecutionProvider');
   assert.equal(engine.info.execution.requestedProvider, 'auto');
   assert.ok(runtimePolicy);
+  const expectedAutoAttempts = runtimePolicy.orderedCandidates[0] === 'apple'
+    ? [
+        {
+          provider: 'apple',
+          status: 'skipped',
+          creationReason: 'model_compute_unsupported',
+        },
+        { provider: 'cpu', status: 'selected' },
+      ]
+    : [{ provider: 'cpu', status: 'selected' }];
   assert.deepEqual(engine.info.execution.selectionTrace, {
     requestedProvider: 'auto',
     policyId: runtimePolicy.id,
     policyVersion: runtimePolicy.version,
     orderedCandidates: runtimePolicy.orderedCandidates,
-    attempts: [{ provider: 'cpu', status: 'selected' }],
+    attempts: expectedAutoAttempts,
     selectedProvider: 'cpu',
   });
   assert.equal(engine.info.execution.sessionFallback, 'error');

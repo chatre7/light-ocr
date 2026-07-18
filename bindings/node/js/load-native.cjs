@@ -47,6 +47,17 @@ function platformPackage() {
   return packages[platformIdentity().id];
 }
 
+function exactKeys(value, expected, field) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw adapterError('package_load_failed', `${field} must be an object`);
+  }
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
+    throw adapterError('package_load_failed', `${field} fields are invalid`);
+  }
+}
+
 function safeArtifactPath(root, value, field) {
   if (typeof value !== 'string' || value === '' || value.includes('\0')) {
     throw adapterError('package_load_failed', `${field} must be a package-relative path`);
@@ -55,7 +66,7 @@ function safeArtifactPath(root, value, field) {
   if (
     path.posix.isAbsolute(normalized) ||
     /^[A-Za-z]:/.test(normalized) ||
-    normalized.split('/').some((part) => part === '..' || part === '')
+    normalized.split('/').some((part) => part === '..' || part === '' || part === '.')
   ) {
     throw adapterError('package_load_failed', `${field} escapes the native package`, value);
   }
@@ -72,20 +83,18 @@ function sha256(filename) {
 }
 
 function verifyArtifact(root, artifact, field) {
-  if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
-    throw adapterError('package_load_failed', `${field} must be an object`);
-  }
+  exactKeys(artifact, ['path', 'bytes', 'sha256'], field);
   const filename = safeArtifactPath(root, artifact.path, `${field}.path`);
   let stats;
   try {
     stats = fs.lstatSync(filename);
   } catch (cause) {
-    throw adapterError('package_load_failed', `Descriptor artifact is missing`, artifact.path, cause);
+    throw adapterError('package_load_failed', 'Descriptor artifact is missing', artifact.path, cause);
   }
   if (!stats.isFile() || stats.isSymbolicLink()) {
     throw adapterError('package_load_failed', 'Descriptor artifact is not a regular file', artifact.path);
   }
-  if (!Number.isSafeInteger(artifact.bytes) || artifact.bytes < 0 || stats.size !== artifact.bytes) {
+  if (!Number.isSafeInteger(artifact.bytes) || artifact.bytes < 1 || stats.size !== artifact.bytes) {
     throw adapterError('package_load_failed', 'Descriptor artifact byte count mismatch', artifact.path);
   }
   if (!/^[a-f0-9]{64}$/.test(artifact.sha256 || '') || sha256(filename) !== artifact.sha256) {
@@ -94,10 +103,30 @@ function verifyArtifact(root, artifact, field) {
   return filename;
 }
 
+function sameArtifact(left, right) {
+  return left?.path === right?.path && left?.bytes === right?.bytes &&
+    left?.sha256 === right?.sha256;
+}
+
 function validateRuntimeDescriptor(descriptorPath) {
   const absoluteDescriptor = path.resolve(descriptorPath);
+  const nativeDirectory = path.dirname(absoluteDescriptor);
+  if (
+    path.basename(absoluteDescriptor) !== 'runtime-descriptor.json' ||
+    path.basename(nativeDirectory) !== 'native'
+  ) {
+    throw adapterError(
+      'package_load_failed',
+      'Native runtime descriptor must use the package native/runtime-descriptor.json path',
+      absoluteDescriptor,
+    );
+  }
   let descriptor;
   try {
+    const nativeStats = fs.lstatSync(nativeDirectory);
+    if (!nativeStats.isDirectory() || nativeStats.isSymbolicLink()) {
+      throw new Error('native payload root is not a regular directory');
+    }
     const stats = fs.lstatSync(absoluteDescriptor);
     if (!stats.isFile() || stats.isSymbolicLink()) throw new Error('not a regular file');
     descriptor = JSON.parse(fs.readFileSync(absoluteDescriptor, 'utf8'));
@@ -109,14 +138,23 @@ function validateRuntimeDescriptor(descriptorPath) {
       cause,
     );
   }
-  const root = path.dirname(path.dirname(absoluteDescriptor));
-  if (!descriptor || descriptor.schemaVersion !== '1.0') {
+  exactKeys(
+    descriptor,
+    ['schemaVersion', 'platform', 'runtime', 'qualificationOnly', 'released',
+      'autoPolicy', 'providers', 'addon'],
+    'runtime descriptor',
+  );
+  if (descriptor.schemaVersion !== '2.0') {
     throw adapterError('package_load_failed', 'Unsupported native runtime descriptor schema');
   }
+  const root = path.dirname(path.dirname(absoluteDescriptor));
   const expected = platformIdentity();
+  const expectedPlatformKeys = expected.libc
+    ? ['id', 'os', 'architecture', 'libc']
+    : ['id', 'os', 'architecture'];
+  exactKeys(descriptor.platform, expectedPlatformKeys, 'platform');
   const actual = descriptor.platform;
   if (
-    !actual ||
     actual.id !== expected.id ||
     actual.os !== expected.os ||
     actual.architecture !== expected.architecture ||
@@ -124,77 +162,156 @@ function validateRuntimeDescriptor(descriptorPath) {
   ) {
     throw adapterError('package_load_failed', 'Native runtime descriptor platform mismatch');
   }
-  if (typeof descriptor.released !== 'boolean' || typeof descriptor.qualificationOnly !== 'boolean') {
+  if (
+    typeof descriptor.released !== 'boolean' ||
+    typeof descriptor.qualificationOnly !== 'boolean' ||
+    descriptor.qualificationOnly === descriptor.released
+  ) {
     throw adapterError('package_load_failed', 'Native runtime descriptor release flags are invalid');
   }
+
+  exactKeys(descriptor.autoPolicy, ['id', 'version', 'providers'], 'autoPolicy');
   const policy = descriptor.autoPolicy;
   if (
-    !policy ||
-    typeof policy.id !== 'string' ||
-    policy.id === '' ||
-    !Number.isSafeInteger(policy.version) ||
-    policy.version < 1 ||
-    policy.version > 0xffffffff ||
-    !Array.isArray(policy.providers) ||
-    policy.providers.length === 0 ||
-    policy.providers.length > 3 ||
-    policy.providers.at(-1) !== 'cpu'
+    typeof policy.id !== 'string' || policy.id === '' ||
+    !Number.isSafeInteger(policy.version) || policy.version < 1 || policy.version > 0xffffffff ||
+    !Array.isArray(policy.providers) || policy.providers.length === 0 ||
+    policy.providers.length > 3 || policy.providers.at(-1) !== 'cpu' ||
+    new Set(policy.providers).size !== policy.providers.length
   ) {
     throw adapterError('package_load_failed', 'Native runtime descriptor Auto policy is invalid');
   }
-  if (descriptor.qualificationOnly === descriptor.released) {
-    throw adapterError(
-      'package_load_failed',
-      'Native runtime descriptor must be either released or qualification-only',
-    );
-  }
-  if (descriptor.qualificationOnly && policy.providers.some((provider) => provider !== 'cpu')) {
-    throw adapterError('package_load_failed', 'Qualification runtime cannot alter released Auto policy');
-  }
-  const addon = verifyArtifact(root, descriptor.addon, 'addon');
+
+  exactKeys(descriptor.runtime, ['flavor', 'kind', 'version', 'abi', 'artifacts'], 'runtime');
+  const runtime = descriptor.runtime;
+  const expectedRuntimes = {
+    cpu: { kind: 'onnxruntime-cpu', version: '1.22.0', abi: 'onnxruntime-c-api-22' },
+    webgpu: {
+      kind: 'onnxruntime-plugin-webgpu',
+      version: '1.24.4',
+      abi: 'onnxruntime-c-api-24-plugin-ep-0.1',
+    },
+  };
+  const expectedRuntime = expectedRuntimes[runtime.flavor];
   if (
-    !descriptor.providers ||
-    typeof descriptor.providers !== 'object' ||
-    Array.isArray(descriptor.providers) ||
+    !expectedRuntime || runtime.kind !== expectedRuntime.kind ||
+    runtime.version !== expectedRuntime.version || runtime.abi !== expectedRuntime.abi ||
+    !Array.isArray(runtime.artifacts) || runtime.artifacts.length === 0
+  ) {
+    throw adapterError('package_load_failed', 'Native runtime descriptor ABI identity is invalid');
+  }
+  if (runtime.flavor === 'webgpu' && !['linux', 'win32'].includes(actual.os)) {
+    throw adapterError('package_load_failed', 'WebGPU runtime is not supported on this platform');
+  }
+  if (runtime.flavor !== 'webgpu' && descriptor.qualificationOnly) {
+    throw adapterError('package_load_failed', 'CPU runtime cannot be qualification-only');
+  }
+
+  const addon = verifyArtifact(root, descriptor.addon, 'addon');
+  const runtimePaths = new Set();
+  const verifiedRuntime = new Map();
+  runtime.artifacts.forEach((artifact, index) => {
+    const filename = verifyArtifact(root, artifact, `runtime.artifacts[${index}]`);
+    if (runtimePaths.has(artifact.path)) {
+      throw adapterError('package_load_failed', 'Runtime artifact inventory contains a duplicate path');
+    }
+    runtimePaths.add(artifact.path);
+    verifiedRuntime.set(artifact.path, filename);
+  });
+
+  exactKeys(descriptor.providers, Object.keys(descriptor.providers), 'providers');
+  const availableProviders = Object.keys(descriptor.providers);
+  if (
+    availableProviders.length === 0 ||
+    new Set(availableProviders).size !== availableProviders.length ||
+    availableProviders.some((provider) => !['cpu', 'apple', 'webgpu'].includes(provider)) ||
     !descriptor.providers.cpu
   ) {
-    throw adapterError('package_load_failed', 'Native runtime descriptor omits CPU provider');
+    throw adapterError('package_load_failed', 'Native runtime descriptor provider policy is invalid');
   }
-  const referenced = new Set([descriptor.addon.path]);
-  let webgpuCompatibility;
+  let webgpuLibrary = '';
+  let webgpuProviderBytes = 0;
+  let webgpuProviderSha256 = '';
   for (const [providerId, provider] of Object.entries(descriptor.providers)) {
-    if (!provider || !Array.isArray(provider.artifacts) || provider.artifacts.length === 0) {
-      throw adapterError('package_load_failed', `Provider ${providerId} has no artifacts`);
+    const expectedKeys = providerId === 'webgpu'
+      ? ['runtimeProvider', 'providerVersion', 'qualificationId', 'providerLibrary', 'artifacts']
+      : ['runtimeProvider', 'qualificationId', 'artifacts'];
+    exactKeys(provider, expectedKeys, `providers.${providerId}`);
+    if (
+      typeof provider.qualificationId !== 'string' || provider.qualificationId === '' ||
+      !Array.isArray(provider.artifacts) || provider.artifacts.length === 0
+    ) {
+      throw adapterError('package_load_failed', `Provider ${providerId} identity is invalid`);
     }
+    const expectedProviderName = {
+      cpu: 'CPUExecutionProvider',
+      apple: 'CoreML',
+      webgpu: 'WebGpuExecutionProvider',
+    }[providerId];
+    if (provider.runtimeProvider !== expectedProviderName) {
+      throw adapterError('package_load_failed', `Provider ${providerId} runtime identity is invalid`);
+    }
+    const providerPaths = new Set();
     provider.artifacts.forEach((artifact, index) => {
       verifyArtifact(root, artifact, `providers.${providerId}.artifacts[${index}]`);
-      referenced.add(artifact.path);
+      if (providerPaths.has(artifact.path)) {
+        throw adapterError('package_load_failed', `Provider ${providerId} has duplicate artifacts`);
+      }
+      providerPaths.add(artifact.path);
+      if (providerId !== 'apple' && !runtimePaths.has(artifact.path)) {
+        throw adapterError('package_load_failed', `Provider ${providerId} artifact is outside runtime inventory`);
+      }
+      if (providerId === 'apple' && artifact.path !== descriptor.addon.path) {
+        throw adapterError('package_load_failed', 'Apple provider artifact must be the native addon');
+      }
     });
     if (providerId === 'webgpu') {
-      const compatibilityPath = verifyArtifact(
-        root,
-        provider.compatibilityManifest,
-        'providers.webgpu.compatibilityManifest',
+      if (provider.providerVersion !== '0.1.0') {
+        throw adapterError('package_load_failed', 'WebGPU provider version is invalid');
+      }
+      webgpuLibrary = verifyArtifact(root, provider.providerLibrary, 'providers.webgpu.providerLibrary');
+      const declared = provider.artifacts.find(
+        (artifact) => artifact.path === provider.providerLibrary.path,
       );
-      try {
-        webgpuCompatibility = JSON.parse(fs.readFileSync(compatibilityPath, 'utf8'));
-      } catch (cause) {
-        throw adapterError(
-          'package_load_failed',
-          'Unable to read the WebGPU compatibility manifest',
-          provider.compatibilityManifest.path,
-          cause,
-        );
+      const expectedBasename = actual.os === 'win32'
+        ? 'onnxruntime_providers_webgpu.dll'
+        : 'libonnxruntime_providers_webgpu.so';
+      if (
+        !declared || !sameArtifact(declared, provider.providerLibrary) ||
+        path.basename(webgpuLibrary) !== expectedBasename
+      ) {
+        throw adapterError('package_load_failed', 'WebGPU provider library contract is invalid');
       }
-      if (!provider.artifacts.some((artifact) => artifact.path === provider.compatibilityManifest.path)) {
-        throw adapterError(
-          'package_load_failed',
-          'WebGPU compatibility manifest is not part of provider artifacts',
-        );
-      }
+      webgpuProviderBytes = provider.providerLibrary.bytes;
+      webgpuProviderSha256 = provider.providerLibrary.sha256;
     }
   }
-  const nativeDirectory = path.join(root, 'native');
+
+  const coreName = actual.os === 'win32'
+    ? 'onnxruntime.dll'
+    : actual.os === 'darwin'
+      ? 'libonnxruntime.1.22.0.dylib'
+      : 'libonnxruntime.so.1';
+  const runtimeNames = [...verifiedRuntime.values()].map((filename) => path.basename(filename)).sort();
+  const expectedRuntimeNames = runtime.flavor === 'webgpu'
+    ? actual.os === 'win32'
+      ? ['dxcompiler.dll', 'dxil.dll', 'onnxruntime.dll', 'onnxruntime_providers_webgpu.dll']
+      : ['libonnxruntime.so.1', 'libonnxruntime_providers_webgpu.so']
+    : [coreName];
+  if (
+    runtimeNames.length !== expectedRuntimeNames.length ||
+    runtimeNames.some((name, index) => name !== expectedRuntimeNames[index])
+  ) {
+    throw adapterError('package_load_failed', 'Native runtime artifact set is incomplete');
+  }
+  const cpuArtifacts = descriptor.providers.cpu.artifacts;
+  if (
+    cpuArtifacts.length !== 1 ||
+    path.basename(safeArtifactPath(root, cpuArtifacts[0].path, 'CPU artifact path')) !== coreName
+  ) {
+    throw adapterError('package_load_failed', 'CPU provider does not reference the core runtime');
+  }
+
   const actualPayload = new Set();
   const inventory = (directory, relativeDirectory) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -213,136 +330,40 @@ function validateRuntimeDescriptor(descriptorPath) {
     }
   };
   inventory(nativeDirectory, 'native');
+  const referenced = new Set([descriptor.addon.path, ...runtimePaths]);
   if (
     actualPayload.size !== referenced.size ||
     [...actualPayload].some((filename) => !referenced.has(filename))
   ) {
     throw adapterError('package_load_failed', 'Native runtime descriptor payload inventory mismatch');
   }
-  const availableProviders = Object.keys(descriptor.providers);
-  if (
-    new Set(availableProviders).size !== availableProviders.length ||
-    availableProviders.some((provider) => !['cpu', 'apple', 'webgpu'].includes(provider)) ||
-    new Set(policy.providers).size !== policy.providers.length ||
-    policy.providers.some((provider) => !availableProviders.includes(provider))
-  ) {
-    throw adapterError('package_load_failed', 'Native runtime descriptor provider policy is invalid');
-  }
-  const runtime = descriptor.runtime;
-  const expectedRuntimes = {
-    cpu: {
-      kind: 'onnxruntime-cpu',
-      version: '1.22.0',
-      abi: 'onnxruntime-c-api-22',
-    },
-    webgpu: {
-      kind: 'onnxruntime-monolithic-webgpu',
-      version: '1.23.0',
-      abi: 'onnxruntime-c-api-23',
-    },
-  };
-  const expectedRuntime = runtime && expectedRuntimes[runtime.flavor];
-  if (
-    !runtime ||
-    typeof runtime !== 'object' ||
-    Array.isArray(runtime) ||
-    !expectedRuntime ||
-    runtime.kind !== expectedRuntime.kind ||
-    runtime.version !== expectedRuntime.version ||
-    runtime.abi !== expectedRuntime.abi
-  ) {
-    throw adapterError('package_load_failed', 'Native runtime descriptor ABI identity is invalid');
-  }
-  if (runtime.flavor === 'webgpu') {
-    const provider = descriptor.providers.webgpu;
-    if (!provider || !Array.isArray(provider.artifacts)) {
-      throw adapterError(
-        'package_load_failed',
-        'WebGPU runtime descriptor omits the WebGPU provider',
-      );
-    }
-    const runtimeArtifacts = provider.artifacts.filter(
-      (artifact) => artifact.path !== provider.compatibilityManifest.path,
-    );
-    const expectedCompatibilityKeys = [
-      'platformId',
-      'provider',
-      'qualificationId',
-      'qualificationOnly',
-      'released',
-      'runtimeAbi',
-      'runtimeArtifact',
-      'runtimeVersion',
-      'schemaVersion',
-    ];
-    if (
-      runtimeArtifacts.length !== 1 ||
-      !webgpuCompatibility ||
-      typeof webgpuCompatibility !== 'object' ||
-      Array.isArray(webgpuCompatibility) ||
-      Object.keys(webgpuCompatibility).sort().join('\0') !==
-        expectedCompatibilityKeys.sort().join('\0') ||
-      webgpuCompatibility.schemaVersion !== '1.0' ||
-      webgpuCompatibility.provider !== 'webgpu' ||
-      webgpuCompatibility.platformId !== actual.id ||
-      webgpuCompatibility.runtimeVersion !== runtime.version ||
-      webgpuCompatibility.runtimeAbi !== runtime.abi ||
-      webgpuCompatibility.qualificationId !== provider.qualificationId ||
-      webgpuCompatibility.qualificationOnly !== descriptor.qualificationOnly ||
-      webgpuCompatibility.released !== descriptor.released ||
-      !webgpuCompatibility.runtimeArtifact ||
-      typeof webgpuCompatibility.runtimeArtifact !== 'object' ||
-      Array.isArray(webgpuCompatibility.runtimeArtifact) ||
-      Object.keys(webgpuCompatibility.runtimeArtifact).sort().join('\0') !==
-        ['bytes', 'sha256'].join('\0') ||
-      webgpuCompatibility.runtimeArtifact.bytes !== runtimeArtifacts[0].bytes ||
-      webgpuCompatibility.runtimeArtifact.sha256 !== runtimeArtifacts[0].sha256
-    ) {
-      throw adapterError(
-        'package_load_failed',
-        'WebGPU compatibility manifest does not match the staged runtime contract',
-      );
-    }
-  } else if (webgpuCompatibility !== undefined) {
-    throw adapterError(
-      'package_load_failed',
-      'CPU runtime descriptor unexpectedly declares WebGPU compatibility',
-    );
-  }
-  const expectedPolicy = descriptor.qualificationOnly
-    ? ['cpu']
+
+  const expectedPolicy = runtime.flavor === 'webgpu'
+    ? ['webgpu', 'cpu']
     : actual.os === 'darwin'
       ? ['apple', 'cpu']
-      : runtime.flavor === 'webgpu'
-        ? ['webgpu', 'cpu']
-        : ['cpu'];
+      : ['cpu'];
   const expectedAvailable = runtime.flavor === 'webgpu'
     ? ['cpu', 'webgpu']
     : actual.os === 'darwin'
       ? ['apple', 'cpu']
       : ['cpu'];
   const sortedAvailable = [...availableProviders].sort();
-  const providerQualificationIds = sortedAvailable.map((providerId) => {
-    const qualificationId = descriptor.providers[providerId]?.qualificationId;
-    if (typeof qualificationId !== 'string' || qualificationId === '') {
-      throw adapterError(
-        'package_load_failed',
-        `Provider ${providerId} has no qualification identity`,
-      );
-    }
-    return qualificationId;
-  });
   if (
     policy.providers.length !== expectedPolicy.length ||
     policy.providers.some((provider, index) => provider !== expectedPolicy[index]) ||
     sortedAvailable.length !== expectedAvailable.length ||
-    sortedAvailable.some((provider, index) => provider !== expectedAvailable[index])
+    sortedAvailable.some((provider, index) => provider !== expectedAvailable[index]) ||
+    policy.providers.some((provider) => !availableProviders.includes(provider))
   ) {
     throw adapterError(
       'package_load_failed',
       'Native runtime descriptor providers disagree with platform capabilities',
     );
   }
+  const providerQualificationIds = sortedAvailable.map(
+    (providerId) => descriptor.providers[providerId].qualificationId,
+  );
   const runtimePolicy = Object.freeze({
     id: policy.id,
     version: policy.version,
@@ -355,6 +376,9 @@ function validateRuntimeDescriptor(descriptorPath) {
     orderedCandidates: Object.freeze([...policy.providers]),
     availableProviders: Object.freeze(sortedAvailable),
     providerQualificationIds: Object.freeze(providerQualificationIds),
+    webgpuProviderLibrary: webgpuLibrary,
+    webgpuProviderBytes,
+    webgpuProviderSha256,
   });
   return {
     addon,
@@ -410,11 +434,9 @@ function validateNativeContract(binding, runtimePolicy) {
     contract.availableProviders.some(
       (provider, index) => provider !== runtimePolicy.availableProviders[index],
     ) ||
-    contract.providerQualificationIds.length !==
-      runtimePolicy.providerQualificationIds.length ||
+    contract.providerQualificationIds.length !== runtimePolicy.providerQualificationIds.length ||
     contract.providerQualificationIds.some(
-      (qualificationId, index) =>
-        qualificationId !== runtimePolicy.providerQualificationIds[index],
+      (qualificationId, index) => qualificationId !== runtimePolicy.providerQualificationIds[index],
     )
   ) {
     throw adapterError(
@@ -454,10 +476,7 @@ function loadNative() {
   try {
     const binding = require(verified.addon);
     validateNativeContract(binding, verified.runtimePolicy);
-    return Object.freeze({
-      binding,
-      runtimePolicy: verified.runtimePolicy,
-    });
+    return Object.freeze({ binding, runtimePolicy: verified.runtimePolicy });
   } catch (cause) {
     throw adapterError('package_load_failed', 'Unable to load the verified native addon', '', cause);
   }

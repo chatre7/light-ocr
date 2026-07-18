@@ -125,6 +125,13 @@ endif()
 target_compile_definitions(light_ocr_core PRIVATE LIGHT_OCR_VERSION="${PROJECT_VERSION}")
 if(LIGHT_OCR_HAS_WEBGPU)
   target_compile_definitions(light_ocr_core PRIVATE LIGHT_OCR_HAS_WEBGPU=1)
+  if(LIGHT_OCR_WEBGPU_QUALIFICATION_BUILD)
+    target_compile_definitions(light_ocr_core PRIVATE
+      LIGHT_OCR_WEBGPU_QUALIFICATION_BUILD=1)
+  endif()
+  if(UNIX AND NOT APPLE)
+    target_link_libraries(light_ocr_core PRIVATE ${CMAKE_DL_LIBS})
+  endif()
 endif()
 
 if(MSVC)

@@ -1,10 +1,12 @@
 #include "test.hpp"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "core/engine_factory.hpp"
 #include "inference/selection.hpp"
 
 namespace light_ocr::test {
@@ -121,6 +123,27 @@ LIGHT_OCR_TEST(auto_final_candidate_failure_is_fatal) {
   EXPECT_FALSE(result.trace.attempts[0].creation_reason.has_value());
   EXPECT_EQ(*result.trace.attempts[0].error_code,
             ErrorCode::runtime_initialization_failed);
+}
+
+LIGHT_OCR_TEST(builtin_webgpu_policy_places_webgpu_before_cpu_when_bundled) {
+  const auto policy = internal::builtin_runtime_policy();
+  const auto webgpu = std::find(policy.available_providers.begin(),
+                                policy.available_providers.end(), "webgpu");
+  if (webgpu == policy.available_providers.end()) {
+    EXPECT_EQ(policy.id, std::string("builtin-cpu-v1"));
+    EXPECT_EQ(policy.ordered_candidates, std::vector<std::string>{"cpu"});
+    return;
+  }
+  EXPECT_EQ(policy.id, std::string("builtin-webgpu-v1"));
+  EXPECT_EQ(policy.ordered_candidates,
+            (std::vector<std::string>{"webgpu", "cpu"}));
+#if defined(LIGHT_OCR_WEBGPU_QUALIFICATION_BUILD)
+  EXPECT_TRUE(policy.qualification_only);
+  EXPECT_TRUE(!policy.released);
+#else
+  EXPECT_TRUE(!policy.qualification_only);
+  EXPECT_TRUE(policy.released);
+#endif
 }
 
 }  // namespace light_ocr::test

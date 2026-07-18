@@ -18,6 +18,12 @@ struct RuntimePolicy {
   std::string runtime_abi;
   bool qualification_only = false;
   bool released = true;
+  // Empty only for direct C++ callers, where the backend resolves the plugin
+  // next to the loaded ONNX Runtime library. Package adapters pass the
+  // descriptor-verified absolute path.
+  std::string webgpu_provider_library;
+  std::uint64_t webgpu_provider_bytes = 0;
+  std::string webgpu_provider_sha256;
   std::vector<std::string> ordered_candidates;
   std::vector<std::string> available_providers;
   // Entries are aligned with available_providers.

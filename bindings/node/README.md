@@ -1,6 +1,6 @@
 # light-ocr Node-API adapter
 
-状态：`@arcships/light-ocr@0.2.0` 已发布；当前 0.2.1 源码候选加入开放 macOS 兼容的 Apple/Core ML provider 与 descriptor 驱动的 Auto 创建选择。tiled detection 和内存 JPEG/PNG 输入继续可用；已发布的 0.2.0 仍为 CPU 默认。
+状态：`@arcships/light-ocr@0.2.0` 已发布；当前 0.2.1 源码候选加入 Apple/Core ML，以及 Linux x64 glibc/Vulkan、Windows x64/D3D12 的 official Native WebGPU Plugin EP 产品实现。WebGPU runtime/npm payload 与 Auto 已接线，但 released policy 仍被双平台真实设备 Gate 阻断；已发布的 0.2.0 仍为 CPU 默认。
 
 推荐直接安装公开 package：
 
@@ -21,7 +21,7 @@ npm install @arcships/light-ocr
 - 支持 `AbortSignal` 协作式取消：queued 请求会从队列移除；running 请求立即拒绝 public Promise，但 Core 会安全运行到返回并丢弃结果。
 - native addon 只接收现有绝对 bundle 目录。当前源码开发调用显式传 `bundlePath`；发布后的 facade 默认使用随 npm 安装的 model package 路径。
 - 产品 engine 默认报告 `detectionStrategy: 'bounded'`、`detectionMaxSide: 960` 和 `defaultRecognitionBatchSize: 1`。0.2.0 可通过 `detection: {strategy: 'tiled'}` 显式选择 `tiled-v1`；`upstreamExact` 只用于上游对照，单次 `recognize({detectionMaxSide})` 只能继续降低 bounded engine 的 side。
-- `createEngine({execution})` 接受 `auto`、`cpu`、`apple` 与已交付平台支持的 `webgpu`。macOS 15+ 默认开放：Apple Silicon interactive 使用 FP16 ANE + 宽文本 FP16 GPU，strict 使用全 GPU；Intel Mac 使用 Core ML CPU+GPU 且只接受 `cpuPartition: 'allow'`。只有 Auto 可在创建期按 descriptor 锁定的 typed failure 继续候选；显式 provider 不回退，旧 `sessionFallback: 'cpu'` 返回 `invalid_argument`。`deviceValidated` 区分已有 M4 证据与其他 Mac 的实验兼容，`engine.info.execution.sessions` 和逐批 diagnostics 还提供模型、设备、缓存、qualification ID、shape bucket 与实际 compute unit。
+- `createEngine({execution})` 接受 `auto`、`cpu`、`apple` 与已交付平台支持的 `webgpu`。macOS 15+ 默认开放：Apple Silicon interactive 使用 FP16 ANE + 宽文本 FP16 GPU，strict 使用全 GPU；Intel Mac 使用 Core ML CPU+GPU 且只接受 `cpuPartition: 'allow'`。WebGPU qualification package 使用 ORT Core 1.24.4 + official plugin 0.1.0，Linux 为 Vulkan、Windows 为 D3D12，FP32 allow/strict 均可显式请求。只有 Auto 可在创建期按 descriptor 锁定的 typed failure 继续候选；显式 provider 不回退，旧 `sessionFallback: 'cpu'` 返回 `invalid_argument`。`engine.info.execution.sessions` 报告每个模型的实际 provider chain、adapter、runtime/provider/qualification identity，selection trace 则报告 Auto 的每次创建尝试。
 
 不支持 WebP、GIF、PDF、EXIF orientation 自动旋转、zero-copy/transfer、运行中 inference 硬中断、Electron 或 Bun。详细契约见 [Node-API 设计](../../docs/napi-design.md)。
 
@@ -47,6 +47,22 @@ cmake --build build-node --target light_ocr_node --parallel
 
 macOS/Linux 的链接产物在 `build-node/bin/light_ocr_node.node`；可加载的完整开发 runtime 会连同 descriptor 与锁定的 ONNX Runtime 一起放在 `build-node/node-runtime/native/`。Windows 还需通过 `LIGHT_OCR_NODE_LIBRARY` 指定当前架构的 `node.lib`，staged runtime 位于 `build-node/node-runtime/Release/native/`。
 
+WebGPU 构建必须先用 [`tools/webgpu/build_runtime.py`](../../tools/webgpu/README.md) 生成并验证目标 SDK，再增加：
+
+```bash
+cmake -S . -B build-node-webgpu -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLIGHT_OCR_DEPENDENCY_CACHE_DIR="$PWD/.cache/dependencies" \
+  -DLIGHT_OCR_ONNXRUNTIME_FLAVOR=webgpu \
+  -DLIGHT_OCR_WEBGPU_SDK_DIR="$PWD/dist/webgpu-sdk/linux-x64" \
+  -DLIGHT_OCR_WEBGPU_QUALIFICATION_BUILD=ON \
+  -DLIGHT_OCR_BUILD_NODE=ON \
+  -DLIGHT_OCR_NODE_INCLUDE_DIR="$NODE_INCLUDE_DIR" \
+  -DLIGHT_OCR_NODE_EXECUTABLE="$(command -v node)"
+```
+
+qualification staged payload 在 Linux 包含 core + plugin，在 Windows 还包含 `dxcompiler.dll` 与 `dxil.dll`。schema 2 descriptor 精确声明所有 native 文件及 SHA-256；loader 从 sterile cwd 验证完整 inventory 后才加载 addon，Core 在注册 plugin 前再次复核 provider library。普通 release 构建不接受 pending qualification lock。
+
 开发期用 `LIGHT_OCR_NODE_BINARY` 指向刚构建的 addon：
 
 ```bash
@@ -71,8 +87,9 @@ const { createEngine, OcrError } = require('@arcships/light-ocr');
 const engine = await createEngine({
   queueCapacity: 4,
   execution: {
-    provider: 'apple',
-    precision: 'fp16',
+    provider: 'webgpu',
+    precision: 'fp32',
+    cpuPartition: 'allow',
     sessionFallback: 'error',
   },
 });

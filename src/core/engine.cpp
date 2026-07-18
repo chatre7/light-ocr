@@ -141,10 +141,26 @@ std::string policy_qualification_id(const internal::RuntimePolicy& policy,
 }
 
 bool valid_runtime_policy(const internal::RuntimePolicy& policy) {
+  const bool valid_provider_hash = policy.webgpu_provider_sha256.empty() ||
+      (policy.webgpu_provider_sha256.size() == 64 &&
+       std::all_of(policy.webgpu_provider_sha256.begin(),
+                   policy.webgpu_provider_sha256.end(), [](char value) {
+                     return (value >= '0' && value <= '9') ||
+                            (value >= 'a' && value <= 'f');
+                   }));
   if (policy.id.empty() || policy.version == 0 ||
       policy.ordered_candidates.empty() ||
       policy.ordered_candidates.back() != "cpu" ||
       !policy_includes_provider(policy, "cpu") ||
+      policy.qualification_only == policy.released ||
+      (!policy.webgpu_provider_library.empty() &&
+       !policy_includes_provider(policy, "webgpu")) ||
+      ((policy.webgpu_provider_bytes != 0 ||
+        !policy.webgpu_provider_sha256.empty()) &&
+       (!policy_includes_provider(policy, "webgpu") ||
+        policy.webgpu_provider_library.empty() ||
+        policy.webgpu_provider_bytes == 0 ||
+        !valid_provider_hash)) ||
       (!policy.provider_qualification_ids.empty() &&
        policy.provider_qualification_ids.size() !=
            policy.available_providers.size())) {
@@ -673,9 +689,18 @@ Engine::~Engine() noexcept = default;
 
 internal::RuntimePolicy internal::builtin_runtime_policy() {
   RuntimePolicy policy;
+#if defined(LIGHT_OCR_HAS_WEBGPU)
+  policy.id = "builtin-webgpu-v1";
+  policy.ordered_candidates = {"webgpu", "cpu"};
+#if defined(LIGHT_OCR_WEBGPU_QUALIFICATION_BUILD)
+  policy.qualification_only = true;
+  policy.released = false;
+#endif
+#else
   policy.id = "builtin-cpu-v1";
-  policy.version = 1;
   policy.ordered_candidates = {"cpu"};
+#endif
+  policy.version = 1;
   policy.available_providers = {"cpu"};
   policy.provider_qualification_ids = {"builtin-cpu-v1"};
 #if defined(LIGHT_OCR_HAS_COREML)
@@ -873,10 +898,26 @@ Result<std::unique_ptr<Engine>> internal::EngineFactory::create(
             candidate_detection_config.provider = created.provider;
             candidate_detection_config.qualification_id =
                 policy_qualification_id(runtime_policy, candidate);
+            candidate_detection_config.webgpu_provider_library =
+                runtime_policy.webgpu_provider_library;
+            candidate_detection_config.webgpu_provider_bytes =
+                runtime_policy.webgpu_provider_bytes;
+            candidate_detection_config.webgpu_provider_sha256 =
+                runtime_policy.webgpu_provider_sha256;
+            candidate_detection_config.webgpu_device_validated =
+                runtime_policy.released && !runtime_policy.qualification_only;
             auto candidate_recognition_config = recognition_config;
             candidate_recognition_config.provider = created.provider;
             candidate_recognition_config.qualification_id =
                 candidate_detection_config.qualification_id;
+            candidate_recognition_config.webgpu_provider_library =
+                candidate_detection_config.webgpu_provider_library;
+            candidate_recognition_config.webgpu_provider_bytes =
+                candidate_detection_config.webgpu_provider_bytes;
+            candidate_recognition_config.webgpu_provider_sha256 =
+                candidate_detection_config.webgpu_provider_sha256;
+            candidate_recognition_config.webgpu_device_validated =
+                candidate_detection_config.webgpu_device_validated;
             std::optional<CreationReason> creation_reason;
             auto candidate_detection = internal::OnnxSession::create(
                 detection_bytes, candidate_detection_config,
@@ -1020,7 +1061,9 @@ Result<std::unique_ptr<Engine>> internal::EngineFactory::create(
       info.execution.provider_capabilities.push_back(
           ProviderCapabilityInfo{"webgpu", true,
                                  selected_provider == ExecutionProvider::webgpu,
-                                 false});
+                                 selected_provider == ExecutionProvider::webgpu &&
+                                     runtime_policy.released &&
+                                     !runtime_policy.qualification_only});
     }
     info.execution.selection_trace = std::move(selection.trace);
     if (policy_includes_provider(runtime_policy, "apple") &&

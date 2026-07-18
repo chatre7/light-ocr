@@ -165,7 +165,7 @@ std::vector<std::string> compiled_provider_qualification_ids() {
 std::vector<std::string> compiled_ordered_candidates() {
 #if LIGHT_OCR_NODE_HAS_APPLE
   return {"apple", "cpu"};
-#elif LIGHT_OCR_NODE_HAS_WEBGPU && !LIGHT_OCR_NODE_QUALIFICATION_ONLY
+#elif LIGHT_OCR_NODE_HAS_WEBGPU
   return {"webgpu", "cpu"};
 #else
   return {"cpu"};
@@ -541,7 +541,9 @@ internal::RuntimePolicy parse_runtime_policy(napi_env env, napi_value value) {
   const std::unordered_set<std::string> allowed{
       "id", "version", "platformId", "runtimeFlavor", "runtimeVersion",
       "runtimeAbi", "qualificationOnly", "released", "orderedCandidates",
-      "availableProviders", "providerQualificationIds"};
+      "availableProviders", "providerQualificationIds",
+      "webgpuProviderLibrary", "webgpuProviderBytes",
+      "webgpuProviderSha256"};
   reject_unknown_properties(env, value, allowed, "runtime policy");
   for (const auto& name : allowed) {
     if (!has_own(env, value, name.c_str())) {
@@ -602,6 +604,15 @@ internal::RuntimePolicy parse_runtime_policy(napi_env env, napi_value value) {
       "runtime policy qualificationOnly");
   policy.released = get_boolean(env, get_named(env, value, "released"),
                                 "runtime policy released");
+  policy.webgpu_provider_library = get_string(
+      env, get_named(env, value, "webgpuProviderLibrary"),
+      "runtime policy webgpuProviderLibrary");
+  policy.webgpu_provider_bytes = get_safe_u64(
+      env, get_named(env, value, "webgpuProviderBytes"),
+      "runtime policy webgpuProviderBytes");
+  policy.webgpu_provider_sha256 = get_string(
+      env, get_named(env, value, "webgpuProviderSha256"),
+      "runtime policy webgpuProviderSha256");
   policy.ordered_candidates = read_strings("orderedCandidates", true);
   policy.available_providers = read_strings("availableProviders", true);
   policy.provider_qualification_ids =
@@ -609,6 +620,32 @@ internal::RuntimePolicy parse_runtime_policy(napi_env env, napi_value value) {
 
   auto available = policy.available_providers;
   std::sort(available.begin(), available.end());
+#if LIGHT_OCR_NODE_HAS_WEBGPU
+#if defined(_WIN32)
+  constexpr const char* kExpectedWebGpuLibrary =
+      "onnxruntime_providers_webgpu.dll";
+#else
+  constexpr const char* kExpectedWebGpuLibrary =
+      "libonnxruntime_providers_webgpu.so";
+#endif
+  const auto provider_path =
+      std::filesystem::u8path(policy.webgpu_provider_library);
+  const bool valid_webgpu_artifact =
+      provider_path.is_absolute() &&
+      provider_path.filename().u8string() == kExpectedWebGpuLibrary &&
+      policy.webgpu_provider_bytes > 0 &&
+      policy.webgpu_provider_sha256.size() == 64 &&
+      std::all_of(policy.webgpu_provider_sha256.begin(),
+                  policy.webgpu_provider_sha256.end(), [](char value) {
+                    return (value >= '0' && value <= '9') ||
+                           (value >= 'a' && value <= 'f');
+                  });
+#else
+  const bool valid_webgpu_artifact =
+      policy.webgpu_provider_library.empty() &&
+      policy.webgpu_provider_bytes == 0 &&
+      policy.webgpu_provider_sha256.empty();
+#endif
   if (policy.id != kRuntimePolicyId ||
       policy.version != kRuntimePolicyVersion ||
       policy.platform_id != kRuntimePlatformId ||
@@ -620,7 +657,8 @@ internal::RuntimePolicy parse_runtime_policy(napi_env env, napi_value value) {
       policy.ordered_candidates != compiled_ordered_candidates() ||
       available != compiled_available_providers() ||
       policy.provider_qualification_ids !=
-          compiled_provider_qualification_ids()) {
+          compiled_provider_qualification_ids() ||
+      !valid_webgpu_artifact) {
     throw AddonFailure(
         "package_load_failed",
         "Runtime descriptor is incompatible with the native addon ABI or capabilities");

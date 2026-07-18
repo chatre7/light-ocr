@@ -2,11 +2,24 @@
 
 #if defined(LIGHT_OCR_HAS_WEBGPU)
 #include <onnxruntime_session_options_config_keys.h>
+
+#include <filesystem>
+#include <mutex>
+
+#if defined(_WIN32)
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
 #endif
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -16,6 +29,7 @@
 #include <vector>
 
 #include "util/checked_math.hpp"
+#include "util/sha256.hpp"
 
 namespace light_ocr::internal {
 namespace {
@@ -40,6 +54,186 @@ class ModelContractError final : public std::runtime_error {
  public:
   using std::runtime_error::runtime_error;
 };
+
+#if defined(LIGHT_OCR_HAS_WEBGPU)
+constexpr const char* kWebGpuEpName = "WebGpuExecutionProvider";
+constexpr const char* kWebGpuRegistrationName = "light-ocr-webgpu";
+#if defined(_WIN32)
+constexpr const char* kWebGpuLibraryName = "onnxruntime_providers_webgpu.dll";
+#else
+constexpr const char* kWebGpuLibraryName = "libonnxruntime_providers_webgpu.so";
+#endif
+
+class WebGpuSetupError final : public std::runtime_error {
+ public:
+  WebGpuSetupError(CreationReason reason, std::string message)
+      : std::runtime_error(std::move(message)), reason_(reason) {}
+
+  CreationReason reason() const noexcept { return reason_; }
+
+ private:
+  CreationReason reason_;
+};
+
+struct WebGpuRegistrationState {
+  std::mutex mutex;
+  std::filesystem::path library;
+  bool registered = false;
+};
+
+WebGpuRegistrationState& webgpu_registration_state() {
+  static WebGpuRegistrationState state;
+  return state;
+}
+
+std::filesystem::path loaded_onnxruntime_directory() {
+#if defined(_WIN32)
+  const auto module = GetModuleHandleW(L"onnxruntime.dll");
+  if (module == nullptr) return {};
+  std::vector<wchar_t> buffer(1024);
+  for (;;) {
+    const auto size = GetModuleFileNameW(
+        module, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (size == 0) return {};
+    if (size + 1 < buffer.size()) {
+      return std::filesystem::path(
+                 std::wstring(buffer.data(), static_cast<std::size_t>(size)))
+          .parent_path();
+    }
+    if (buffer.size() >= 32768) return {};
+    buffer.resize(buffer.size() * 2);
+  }
+#else
+  Dl_info information{};
+  if (dladdr(reinterpret_cast<const void*>(&OrtGetApiBase), &information) == 0 ||
+      information.dli_fname == nullptr || information.dli_fname[0] == '\0') {
+    return {};
+  }
+  return std::filesystem::path(information.dli_fname).parent_path();
+#endif
+}
+
+std::filesystem::path webgpu_library_path(
+    const std::string& configured, std::uint64_t expected_bytes,
+    const std::string& expected_sha256) {
+  std::filesystem::path library;
+  if (configured.empty()) {
+    const auto directory = loaded_onnxruntime_directory();
+    if (directory.empty()) {
+      throw WebGpuSetupError(
+          CreationReason::unrecoverable_load_failed,
+          "Cannot locate the loaded ONNX Runtime library for WebGPU plugin discovery");
+    }
+    library = directory / kWebGpuLibraryName;
+  } else {
+    library = std::filesystem::u8path(configured);
+    if (!library.is_absolute()) {
+      throw WebGpuSetupError(
+          CreationReason::internal_assertion_failed,
+          "The WebGPU provider library path must be absolute");
+    }
+  }
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(library, error);
+  if (error || !std::filesystem::is_regular_file(status) ||
+      std::filesystem::is_symlink(status)) {
+    throw WebGpuSetupError(
+        CreationReason::package_corrupt,
+        "The WebGPU provider library is missing or is not a regular file");
+  }
+  if (expected_bytes != 0 || !expected_sha256.empty()) {
+    const auto actual_bytes = std::filesystem::file_size(library, error);
+    if (error || actual_bytes != expected_bytes ||
+        expected_bytes > std::numeric_limits<std::size_t>::max() ||
+        expected_bytes > static_cast<std::uint64_t>(
+                             std::numeric_limits<std::streamsize>::max())) {
+      throw WebGpuSetupError(
+          CreationReason::artifact_hash_mismatch,
+          "The WebGPU provider library byte count does not match its runtime descriptor");
+    }
+    std::vector<std::uint8_t> contents(static_cast<std::size_t>(expected_bytes));
+    std::ifstream input(library, std::ios::binary);
+    if (!input ||
+        (expected_bytes != 0 &&
+         !input.read(reinterpret_cast<char*>(contents.data()),
+                     static_cast<std::streamsize>(contents.size()))) ||
+        input.peek() != std::ifstream::traits_type::eof()) {
+      throw WebGpuSetupError(
+          CreationReason::artifact_hash_mismatch,
+          "The WebGPU provider library changed while it was being verified");
+    }
+    if (sha256_hex(contents.data(), contents.size()) != expected_sha256) {
+      throw WebGpuSetupError(
+          CreationReason::artifact_hash_mismatch,
+          "The WebGPU provider library hash does not match its runtime descriptor");
+    }
+  }
+  return library.lexically_normal();
+}
+
+std::vector<Ort::ConstEpDevice> webgpu_devices(
+    const InferenceSessionConfig& config) {
+  const auto library = webgpu_library_path(
+      config.webgpu_provider_library, config.webgpu_provider_bytes,
+      config.webgpu_provider_sha256);
+  auto& state = webgpu_registration_state();
+  std::lock_guard<std::mutex> lock(state.mutex);
+  auto& env = environment();
+  if (state.registered && state.library != library) {
+    throw WebGpuSetupError(
+        CreationReason::provider_abi_mismatch,
+        "A different WebGPU provider library is already registered in this process");
+  }
+  if (!state.registered) {
+    try {
+      env.RegisterExecutionProviderLibrary(kWebGpuRegistrationName,
+                                           library.native());
+    } catch (const Ort::Exception& exception) {
+      throw WebGpuSetupError(
+          CreationReason::unrecoverable_load_failed,
+          std::string("ONNX Runtime could not register the WebGPU provider library: ") +
+              exception.what());
+    }
+    state.library = library;
+    state.registered = true;
+  }
+  std::vector<Ort::ConstEpDevice> selected;
+  for (const auto& device : env.GetEpDevices()) {
+    const auto* name = device.EpName();
+    if (name != nullptr && std::string(name) == kWebGpuEpName) {
+      selected.push_back(device);
+    }
+  }
+  if (selected.empty()) {
+    throw WebGpuSetupError(
+        CreationReason::adapter_unavailable,
+        "The WebGPU provider registered successfully but exposed no compatible GPU adapter");
+  }
+  return selected;
+}
+
+std::string webgpu_device_description(
+    const std::vector<Ort::ConstEpDevice>& devices) {
+  const auto& ep_device = devices.front();
+  const auto hardware = ep_device.Device();
+  const auto* hardware_vendor = hardware.Vendor();
+  const auto* provider_vendor = ep_device.EpVendor();
+  std::string description = "webgpu";
+  if (hardware_vendor != nullptr && hardware_vendor[0] != '\0') {
+    description += ":";
+    description += hardware_vendor;
+  } else if (provider_vendor != nullptr && provider_vendor[0] != '\0') {
+    description += ":";
+    description += provider_vendor;
+  }
+  description += ":" + std::to_string(hardware.VendorId()) + ":" +
+                 std::to_string(hardware.DeviceId());
+  if (devices.size() > 1) {
+    description += ":" + std::to_string(devices.size()) + "-devices";
+  }
+  return description;
+}
+#endif
 
 bool supported_dimension(std::int64_t value, std::int64_t expected) {
   return value == -1 || value == expected;
@@ -118,7 +312,7 @@ void validate_session_config(const InferenceSessionConfig& config) {
 }
 
 SessionExecutionInfo make_execution_info(const InferenceSessionConfig& config,
-                                         ModelKind kind) {
+                                         std::string webgpu_device) {
   SessionExecutionInfo info;
   const bool webgpu = config.provider == ExecutionProvider::webgpu;
   info.requested_provider = config.requested_provider_override.empty()
@@ -126,12 +320,16 @@ SessionExecutionInfo make_execution_info(const InferenceSessionConfig& config,
                                 : config.requested_provider_override;
   if (webgpu) {
     info.actual_provider_chain = {"WebGpuExecutionProvider"};
-    if (config.cpu_partition == CpuPartition::allow &&
-        kind == ModelKind::recognition) {
+    if (config.cpu_partition == CpuPartition::allow) {
       info.actual_provider_chain.push_back("CPUExecutionProvider");
     }
-    info.device = "webgpu-default";
-    info.device_validated = false;
+    info.device = std::move(webgpu_device);
+    info.device_validated = config.webgpu_device_validated;
+#if defined(_WIN32)
+    info.operating_system = "windows";
+#elif defined(__linux__)
+    info.operating_system = "linux";
+#endif
   } else {
     info.actual_provider_chain = {"CPUExecutionProvider"};
     info.device = "cpu";
@@ -144,7 +342,7 @@ SessionExecutionInfo make_execution_info(const InferenceSessionConfig& config,
   info.model_sha256 = config.model_sha256;
   info.runtime = "ONNX Runtime";
   info.runtime_version = Ort::GetVersionString();
-  info.provider_version = info.runtime_version;
+  info.provider_version = webgpu ? "0.1.0" : info.runtime_version;
   info.model_cache_status = "not_applicable";
   info.session_fallback = config.session_fallback_used;
   info.fallback_reason = config.fallback_reason;
@@ -154,15 +352,40 @@ SessionExecutionInfo make_execution_info(const InferenceSessionConfig& config,
 }  // namespace
 
 void add_webgpu_session_config_entries(Ort::SessionOptions& options) {
+#if defined(_WIN32)
+  options.AddConfigEntry(
+      "ep.webgpuexecutionprovider.dawnBackendType", "D3D12");
+#else
   options.AddConfigEntry(
       "ep.webgpuexecutionprovider.dawnBackendType", "Vulkan");
+#endif
   options.AddConfigEntry(
       "ep.webgpuexecutionprovider.preferredLayout", "NHWC");
   options.AddConfigEntry(
       "ep.webgpuexecutionprovider.enableGraphCapture", "0");
   options.AddConfigEntry(
       "ep.webgpuexecutionprovider.validationMode", "basic");
+  options.AddConfigEntry(
+      "ep.webgpuexecutionprovider.powerPreference", "high-performance");
 }
+
+#if defined(LIGHT_OCR_HAS_WEBGPU) && \
+    defined(LIGHT_OCR_WEBGPU_QUALIFICATION_BUILD)
+void enable_webgpu_qualification_profile(Ort::SessionOptions& options,
+                                         ModelKind kind) {
+  const auto* configured = std::getenv("LIGHT_OCR_WEBGPU_PROFILE_PREFIX");
+  if (configured == nullptr || configured[0] == '\0') return;
+  auto prefix = std::filesystem::u8path(configured);
+  if (!prefix.is_absolute()) {
+    throw std::invalid_argument(
+        "LIGHT_OCR_WEBGPU_PROFILE_PREFIX must be an absolute path");
+  }
+  static std::atomic<std::uint64_t> sequence{0};
+  prefix += kind == ModelKind::detection ? "-detection" : "-recognition";
+  prefix += "-" + std::to_string(sequence.fetch_add(1, std::memory_order_relaxed));
+  options.EnableProfiling(prefix.native().c_str());
+}
+#endif
 
 OnnxSession::OnnxSession(std::unique_ptr<Ort::Session> session, std::string input_name,
                          std::string output_name, SessionExecutionInfo execution_info)
@@ -188,6 +411,7 @@ Result<std::unique_ptr<OnnxSession>> OnnxSession::create(
     options.SetInterOpNumThreads(static_cast<int>(config.inter_op_threads));
     options.SetExecutionMode(config.inter_op_threads > 1 ? ORT_PARALLEL : ORT_SEQUENTIAL);
     options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+    std::string selected_webgpu_device;
     if (config.provider == ExecutionProvider::webgpu) {
 #if defined(LIGHT_OCR_HAS_WEBGPU)
       options.DisableMemPattern();
@@ -195,7 +419,12 @@ Result<std::unique_ptr<OnnxSession>> OnnxSession::create(
         options.AddConfigEntry(kOrtSessionOptionsDisableCPUEPFallback, "1");
       }
       add_webgpu_session_config_entries(options);
-      options.AppendExecutionProvider("WebGPU", {});
+#if defined(LIGHT_OCR_WEBGPU_QUALIFICATION_BUILD)
+      enable_webgpu_qualification_profile(options, kind);
+#endif
+      const auto devices = webgpu_devices(config);
+      selected_webgpu_device = webgpu_device_description(devices);
+      options.AppendExecutionProvider_V2(environment(), devices, {});
 #else
       set_creation_reason(creation_reason,
                           CreationReason::provider_abi_mismatch);
@@ -217,7 +446,15 @@ Result<std::unique_ptr<OnnxSession>> OnnxSession::create(
     }
     return Result<std::unique_ptr<OnnxSession>>::success(std::unique_ptr<OnnxSession>(
         new OnnxSession(std::move(session), input_name.get(), output_name.get(),
-                        make_execution_info(config, kind))));
+                        make_execution_info(config,
+                                            std::move(selected_webgpu_device)))));
+#if defined(LIGHT_OCR_HAS_WEBGPU)
+  } catch (const WebGpuSetupError& exception) {
+    set_creation_reason(creation_reason, exception.reason());
+    return runtime_failure<std::unique_ptr<OnnxSession>>(
+        ErrorCode::runtime_initialization_failed,
+        "ONNX Runtime WebGPU provider setup failed", exception.what());
+#endif
   } catch (const std::invalid_argument& exception) {
     set_creation_reason(creation_reason,
                         CreationReason::internal_assertion_failed);

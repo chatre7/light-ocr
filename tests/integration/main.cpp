@@ -13,6 +13,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include "common/bundle_files.hpp"
+#include "core/engine_factory.hpp"
 #include "inference/onnxruntime/backend.hpp"
 #include "light_ocr/core.hpp"
 
@@ -21,10 +22,15 @@ int main() {
     Ort::SessionOptions webgpu_options;
     light_ocr::internal::add_webgpu_session_config_entries(webgpu_options);
     const std::vector<std::pair<const char*, const char*>> expected_webgpu_config{
+#if defined(_WIN32)
+        {"ep.webgpuexecutionprovider.dawnBackendType", "D3D12"},
+#else
         {"ep.webgpuexecutionprovider.dawnBackendType", "Vulkan"},
+#endif
         {"ep.webgpuexecutionprovider.preferredLayout", "NHWC"},
         {"ep.webgpuexecutionprovider.enableGraphCapture", "0"},
         {"ep.webgpuexecutionprovider.validationMode", "basic"},
+        {"ep.webgpuexecutionprovider.powerPreference", "high-performance"},
     };
     for (const auto& entry : expected_webgpu_config) {
       if (!webgpu_options.HasConfigEntry(entry.first) ||
@@ -107,7 +113,19 @@ int main() {
                 << bundle.error().message << ": " << bundle.error().detail << '\n';
       return 1;
     }
-    auto engine = light_ocr::Engine::create(std::move(bundle).value());
+    const auto builtin_policy = light_ocr::internal::builtin_runtime_policy();
+    const bool webgpu_runtime =
+        std::find(builtin_policy.available_providers.begin(),
+                  builtin_policy.available_providers.end(), "webgpu") !=
+        builtin_policy.available_providers.end();
+    light_ocr::EngineOptions integration_options;
+    if (webgpu_runtime) {
+      // The ordinary integration suite is hardware-independent. Direct C++
+      // Auto is exercised by the real-device WebGPU qualification runner.
+      integration_options.execution.provider = light_ocr::ExecutionProvider::cpu;
+    }
+    auto engine = light_ocr::Engine::create(std::move(bundle).value(),
+                                            integration_options);
     if (!engine) {
       std::cerr << "engine: " << light_ocr::to_string(engine.error().code) << ": "
                 << engine.error().message << ": " << engine.error().detail << '\n';
@@ -121,31 +139,36 @@ int main() {
       return 1;
     }
     const auto& execution = engine.value()->info().execution;
-#if defined(LIGHT_OCR_HAS_WEBGPU)
-    const bool provider_capabilities_valid =
-        execution.provider_capabilities.size() == 2 &&
+    const bool cpu_capability_valid =
+        !execution.provider_capabilities.empty() &&
         execution.provider_capabilities[0].provider == "cpu" &&
         execution.provider_capabilities[0].package_included &&
         execution.provider_capabilities[0].device_available &&
-        execution.provider_capabilities[0].device_validated &&
-        execution.provider_capabilities[1].provider == "webgpu" &&
-        execution.provider_capabilities[1].package_included &&
-        !execution.provider_capabilities[1].device_available &&
-        !execution.provider_capabilities[1].device_validated;
-#else
+        execution.provider_capabilities[0].device_validated;
     const bool provider_capabilities_valid =
-        execution.provider_capabilities.size() == 1 &&
-        execution.provider_capabilities.front().provider == "cpu" &&
-        execution.provider_capabilities.front().package_included &&
-        execution.provider_capabilities.front().device_available &&
-        execution.provider_capabilities.front().device_validated;
-#endif
-    if (execution.requested_provider != light_ocr::ExecutionProvider::automatic ||
-        execution.selection_trace.requested_provider != "auto" ||
-        execution.selection_trace.policy_id !=
-            std::optional<std::string>{"builtin-cpu-v1"} ||
+        cpu_capability_valid &&
+        (webgpu_runtime
+             ? execution.provider_capabilities.size() == 2 &&
+                   execution.provider_capabilities[1].provider == "webgpu" &&
+                   execution.provider_capabilities[1].package_included &&
+                   !execution.provider_capabilities[1].device_available &&
+                   !execution.provider_capabilities[1].device_validated
+             : execution.provider_capabilities.size() == 1);
+    const auto expected_requested =
+        webgpu_runtime ? light_ocr::ExecutionProvider::cpu
+                       : light_ocr::ExecutionProvider::automatic;
+    const auto expected_policy_id =
+        webgpu_runtime ? std::optional<std::string>{}
+                       : std::optional<std::string>{"builtin-cpu-v1"};
+    const auto expected_policy_version =
+        webgpu_runtime ? std::optional<std::uint32_t>{}
+                       : std::optional<std::uint32_t>{1};
+    if (execution.requested_provider != expected_requested ||
+        execution.selection_trace.requested_provider !=
+            (webgpu_runtime ? "cpu" : "auto") ||
+        execution.selection_trace.policy_id != expected_policy_id ||
         execution.selection_trace.policy_version !=
-            std::optional<std::uint32_t>{1} ||
+            expected_policy_version ||
         execution.selection_trace.ordered_candidates !=
             std::vector<std::string>{"cpu"} ||
         execution.selection_trace.attempts.size() != 1 ||
@@ -175,7 +198,7 @@ int main() {
         execution.recognition.shape_policy != "dynamic" ||
         execution.detection.session_fallback ||
         execution.detection.fallback_reason.has_value()) {
-      std::cerr << "default CPU execution summary is invalid\n";
+      std::cerr << "hardware-independent CPU execution summary is invalid\n";
       return 1;
     }
     const std::uint8_t tiny_pixel = 255;
