@@ -424,7 +424,8 @@ Result<std::unique_ptr<OnnxSession>> OnnxSession::create(
 #endif
       const auto devices = webgpu_devices(config);
       selected_webgpu_device = webgpu_device_description(devices);
-      options.AppendExecutionProvider_V2(environment(), devices, {});
+      options.AppendExecutionProvider_V2(environment(), devices,
+                                         Ort::KeyValuePairs{});
 #else
       set_creation_reason(creation_reason,
                           CreationReason::provider_abi_mismatch);
