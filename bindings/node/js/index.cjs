@@ -201,13 +201,16 @@ class OcrEngineImpl {
   }
 }
 
-let binding;
+let nativeRuntime;
 
 async function createEngine(options) {
   try {
     const resolvedOptions = resolveCreateOptions(options);
-    if (!binding) binding = loadNative();
-    const nativeEngine = await binding.createEngine(resolvedOptions);
+    if (!nativeRuntime) nativeRuntime = loadNative();
+    const nativeEngine = await nativeRuntime.binding.createEngine(
+      resolvedOptions,
+      nativeRuntime.runtimePolicy,
+    );
     return new OcrEngineImpl(nativeEngine);
   } catch (error) {
     throw normalizeNativeError(error);

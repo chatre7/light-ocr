@@ -56,6 +56,25 @@ EXPECTED_DYNAMIC_DEPENDENCIES = [
     "libc.so.6",
     "ld-linux-x86-64.so.2",
 ]
+EXPECTED_PUBLIC_HEADERS = [
+    "onnxruntime_c_api.h",
+    "onnxruntime_cxx_api.h",
+    "onnxruntime_cxx_inline.h",
+    "onnxruntime_ep_c_api.h",
+    "onnxruntime_float16.h",
+    "onnxruntime_run_options_config_keys.h",
+    "onnxruntime_session_options_config_keys.h",
+]
+EXPECTED_SESSION_OPTIONS = {
+    "providerName": "WebGPU",
+    "providerOptions": {
+        "dawnBackendType": "Vulkan",
+        "preferredLayout": "NHWC",
+        "enableGraphCapture": "0",
+        "validationMode": "basic",
+    },
+    "deviceIdSupported": False,
+}
 EXPECTED_QUALIFICATION = {
     "status": "proof-of-concept-only",
     "evidenceId": "native-webgpu-ort-1.23.0-20260716",
@@ -215,6 +234,10 @@ def validate_lock(lock: dict[str, object]) -> None:
     if definitions != required_definitions:
         raise ContractError("cmakeDefinitions do not match the Vulkan-only product contract")
 
+    require_exact(
+        lock.get("sessionOptions"), EXPECTED_SESSION_OPTIONS, "sessionOptions"
+    )
+
     artifacts = require_mapping(lock, "artifacts")
     if artifacts.get("versionedLibrary") != "libonnxruntime.so.1.23.0":
         raise ContractError("unexpected versioned runtime library name")
@@ -232,6 +255,11 @@ def validate_lock(lock: dict[str, object]) -> None:
         artifacts.get("allowedDynamicDependencies"),
         EXPECTED_DYNAMIC_DEPENDENCIES,
         "artifacts.allowedDynamicDependencies",
+    )
+    require_exact(artifacts.get("includeDirectory"), "include", "artifacts.includeDirectory")
+    require_exact(artifacts.get("libraryDirectory"), "lib", "artifacts.libraryDirectory")
+    require_exact(
+        artifacts.get("publicHeaders"), EXPECTED_PUBLIC_HEADERS, "artifacts.publicHeaders"
     )
     if "productionSha256" not in artifacts:
         raise ContractError(
@@ -444,6 +472,29 @@ def validate_artifact(
     }
 
 
+def file_identity(path: Path, root: Path) -> dict[str, object]:
+    data = path.read_bytes()
+    return {
+        "path": path.relative_to(root).as_posix(),
+        "bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+
+
+def stage_public_headers(source: Path, destination: Path, names: Sequence[str]) -> list[dict[str, object]]:
+    source_dir = source / "include" / "onnxruntime" / "core" / "session"
+    destination.mkdir(parents=True)
+    records: list[dict[str, object]] = []
+    for name in names:
+        source_header = source_dir / name
+        if not source_header.is_file() or source_header.is_symlink():
+            raise ContractError(f"locked ONNX Runtime public header is missing: {source_header}")
+        target = destination / name
+        shutil.copy2(source_header, target)
+        records.append(file_identity(target, destination.parent))
+    return records
+
+
 def stage_artifact(
     built_library: Path,
     output_dir: Path,
@@ -458,7 +509,9 @@ def stage_artifact(
     try:
         artifacts = require_mapping(lock, "artifacts")
         versioned_name = require_string(artifacts, "versionedLibrary")
-        staged_library = stage / versioned_name
+        library_dir = stage / require_string(artifacts, "libraryDirectory")
+        library_dir.mkdir()
+        staged_library = library_dir / versioned_name
         shutil.copy2(built_library, staged_library)
         artifact_details = validate_artifact(staged_library, lock)
 
@@ -468,16 +521,47 @@ def stage_artifact(
             assert isinstance(name, str) and isinstance(target, str)
             if Path(name).name != name or Path(target).name != target:
                 raise ContractError("artifact symlinks must use relative leaf names")
-            (stage / name).symlink_to(target)
+            (library_dir / name).symlink_to(target)
+
+        public_headers = artifacts.get("publicHeaders")
+        assert isinstance(public_headers, list)
+        header_records = stage_public_headers(
+            source,
+            stage / require_string(artifacts, "includeDirectory"),
+            public_headers,
+        )
+        header_digest = hashlib.sha256()
+        for record in header_records:
+            header_digest.update(str(record["path"]).encode("utf-8"))
+            header_digest.update(b"\0")
+            header_digest.update(str(record["sha256"]).encode("ascii"))
+            header_digest.update(b"\n")
 
         ort = require_mapping(require_mapping(lock, "sources"), "onnxruntime")
         dawn = require_mapping(require_mapping(lock, "sources"), "dawn")
         qualification = require_mapping(lock, "qualification")
+        library_record = file_identity(staged_library, stage)
         manifest = {
             "schemaVersion": 1,
             "contractId": lock["contractId"],
-            "artifact": {"filename": versioned_name, **artifact_details},
-            "symlinks": links,
+            "runtimeFlavor": "webgpu",
+            "artifact": {
+                "filename": library_record["path"],
+                **artifact_details,
+            },
+            "files": [library_record, *header_records],
+            "headers": {
+                "directory": artifacts["includeDirectory"],
+                "onnxruntimeVersion": ort["version"],
+                "onnxruntimeCommit": ort["commit"],
+                "identitySha256": header_digest.hexdigest(),
+                "files": header_records,
+            },
+            "symlinks": {
+                f"{artifacts['libraryDirectory']}/{name}": target
+                for name, target in links.items()
+            },
+            "sessionOptions": lock["sessionOptions"],
             "sources": {
                 "onnxruntimeCommit": git_output(source, "rev-parse", "HEAD"),
                 "dawnRevision": dawn["revision"],
@@ -490,6 +574,7 @@ def stage_artifact(
             "qualification": {
                 **qualification,
                 "productionHashStatus": artifacts["productionHashStatus"],
+                "productionSha256": artifacts["productionSha256"],
                 "productionArtifactQualified": False,
             },
         }

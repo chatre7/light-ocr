@@ -1,10 +1,15 @@
 #include "inference/onnxruntime/backend.hpp"
 
+#if defined(LIGHT_OCR_HAS_WEBGPU)
+#include <onnxruntime_session_options_config_keys.h>
+#endif
+
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -21,9 +26,20 @@ Ort::Env& environment() {
 }
 
 template <class T>
-Result<T> runtime_failure(ErrorCode code, const char* message, std::string detail = {}) {
+Result<T> runtime_failure(ErrorCode code, const char* message,
+                          std::string detail = {}) {
   return Result<T>::failure(Error{code, message, std::move(detail)});
 }
+
+void set_creation_reason(std::optional<CreationReason>* output,
+                         CreationReason reason) {
+  if (output != nullptr) *output = reason;
+}
+
+class ModelContractError final : public std::runtime_error {
+ public:
+  using std::runtime_error::runtime_error;
+};
 
 bool supported_dimension(std::int64_t value, std::int64_t expected) {
   return value == -1 || value == expected;
@@ -32,7 +48,7 @@ bool supported_dimension(std::int64_t value, std::int64_t expected) {
 void validate_model_contract(Ort::Session& session, ModelKind kind,
                              std::size_t expected_recognition_classes) {
   if (session.GetInputCount() != 1 || session.GetOutputCount() != 1) {
-    throw std::runtime_error("Model must have exactly one input and one output");
+    throw ModelContractError("Model must have exactly one input and one output");
   }
   const auto input_type = session.GetInputTypeInfo(0);
   const auto output_type = session.GetOutputTypeInfo(0);
@@ -40,7 +56,7 @@ void validate_model_contract(Ort::Session& session, ModelKind kind,
   const auto output_info = output_type.GetTensorTypeAndShapeInfo();
   if (input_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
       output_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    throw std::runtime_error(
+    throw ModelContractError(
         "Model input and output tensors must use float32 (input=" +
         std::to_string(static_cast<int>(input_info.GetElementType())) + ", output=" +
         std::to_string(static_cast<int>(output_info.GetElementType())) + ")");
@@ -48,22 +64,22 @@ void validate_model_contract(Ort::Session& session, ModelKind kind,
   const auto input_shape = input_info.GetShape();
   const auto output_shape = output_info.GetShape();
   if (input_shape.size() != 4 || !supported_dimension(input_shape[1], 3)) {
-    throw std::runtime_error("Model input must be rank-4 NCHW with three channels");
+    throw ModelContractError("Model input must be rank-4 NCHW with three channels");
   }
   if (kind == ModelKind::detection) {
     if (output_shape.size() != 3 && output_shape.size() != 4) {
-      throw std::runtime_error("Detection output must be rank 3 or 4");
+      throw ModelContractError("Detection output must be rank 3 or 4");
     }
     if (output_shape.size() == 4 && !supported_dimension(output_shape[1], 1)) {
-      throw std::runtime_error("Detection output channel dimension must be one");
+      throw ModelContractError("Detection output channel dimension must be one");
     }
   } else {
     if (!supported_dimension(input_shape[2], 48) || output_shape.size() != 3) {
-      throw std::runtime_error("Recognition model tensor ranks or height are unsupported");
+      throw ModelContractError("Recognition model tensor ranks or height are unsupported");
     }
     if (output_shape[2] > 0 &&
         static_cast<std::size_t>(output_shape[2]) != expected_recognition_classes) {
-      throw std::runtime_error("Recognition output class count does not match dictionary");
+      throw ModelContractError("Recognition output class count does not match dictionary");
     }
   }
 }
@@ -72,39 +88,56 @@ void validate_session_config(const InferenceSessionConfig& config) {
   if (config.intra_op_threads == 0 || config.inter_op_threads == 0) {
     throw std::invalid_argument("ONNX Runtime thread counts must be positive");
   }
-  if (config.provider != ExecutionProvider::cpu) {
-    throw std::invalid_argument("ONNX Runtime build only supports the CPU provider");
+  if (config.provider != ExecutionProvider::cpu &&
+      config.provider != ExecutionProvider::webgpu) {
+    throw std::invalid_argument("ONNX Runtime provider is unsupported");
   }
   if (config.session_fallback != SessionFallback::error) {
-    throw std::invalid_argument("CPU sessions do not support a CPU fallback policy");
+    throw std::invalid_argument("Cross-backend session fallback is unsupported");
   }
-  if (config.cpu_partition != CpuPartition::allow) {
+  if (config.provider == ExecutionProvider::cpu &&
+      config.cpu_partition != CpuPartition::allow) {
     throw std::invalid_argument("CPU sessions require cpuPartition=allow");
   }
   if (config.device_id) {
-    throw std::invalid_argument("CPU sessions do not accept a device ID");
+    throw std::invalid_argument(
+        "ONNX Runtime WebGPU deviceId is a context ID, not an adapter ordinal");
   }
   if (config.performance_hint != PerformanceHint::latency) {
     throw std::invalid_argument(
-        "CPU throughput profiles are not qualified in this release");
+        "ONNX Runtime throughput profiles are not qualified in this release");
   }
   if (config.precision != Precision::automatic &&
       config.precision != Precision::fp32) {
-    throw std::invalid_argument("CPU sessions only support FP32 precision");
+    throw std::invalid_argument("ONNX Runtime sessions only support FP32 precision");
   }
   if (config.model_id.empty() || config.model_sha256.size() != 64 ||
-      config.shape_policy.empty()) {
+      config.shape_policy.empty() || config.qualification_id.empty()) {
     throw std::invalid_argument("Inference session identity is incomplete");
   }
 }
 
-SessionExecutionInfo make_execution_info(const InferenceSessionConfig& config) {
+SessionExecutionInfo make_execution_info(const InferenceSessionConfig& config,
+                                         ModelKind kind) {
   SessionExecutionInfo info;
+  const bool webgpu = config.provider == ExecutionProvider::webgpu;
   info.requested_provider = config.requested_provider_override.empty()
-                                ? "cpu"
+                                ? webgpu ? "webgpu" : "cpu"
                                 : config.requested_provider_override;
-  info.actual_provider_chain = {"CPUExecutionProvider"};
-  info.device = "cpu";
+  if (webgpu) {
+    info.actual_provider_chain = {"WebGpuExecutionProvider"};
+    if (config.cpu_partition == CpuPartition::allow &&
+        kind == ModelKind::recognition) {
+      info.actual_provider_chain.push_back("CPUExecutionProvider");
+    }
+    info.device = "webgpu-default";
+    info.device_validated = false;
+  } else {
+    info.actual_provider_chain = {"CPUExecutionProvider"};
+    info.device = "cpu";
+    info.device_validated = true;
+  }
+  info.qualification_id = config.qualification_id;
   info.precision = "fp32";
   info.shape_policy = config.shape_policy;
   info.model_id = config.model_id;
@@ -113,13 +146,23 @@ SessionExecutionInfo make_execution_info(const InferenceSessionConfig& config) {
   info.runtime_version = Ort::GetVersionString();
   info.provider_version = info.runtime_version;
   info.model_cache_status = "not_applicable";
-  info.device_validated = true;
   info.session_fallback = config.session_fallback_used;
   info.fallback_reason = config.fallback_reason;
   return info;
 }
 
 }  // namespace
+
+void add_webgpu_session_config_entries(Ort::SessionOptions& options) {
+  options.AddConfigEntry(
+      "ep.webgpuexecutionprovider.dawnBackendType", "Vulkan");
+  options.AddConfigEntry(
+      "ep.webgpuexecutionprovider.preferredLayout", "NHWC");
+  options.AddConfigEntry(
+      "ep.webgpuexecutionprovider.enableGraphCapture", "0");
+  options.AddConfigEntry(
+      "ep.webgpuexecutionprovider.validationMode", "basic");
+}
 
 OnnxSession::OnnxSession(std::unique_ptr<Ort::Session> session, std::string input_name,
                          std::string output_name, SessionExecutionInfo execution_info)
@@ -130,9 +173,12 @@ OnnxSession::OnnxSession(std::unique_ptr<Ort::Session> session, std::string inpu
 
 Result<std::unique_ptr<OnnxSession>> OnnxSession::create(
     const SharedBytes& model, const InferenceSessionConfig& config, ModelKind kind,
-    std::size_t expected_recognition_classes) {
+    std::size_t expected_recognition_classes,
+    std::optional<CreationReason>* creation_reason) {
+  if (creation_reason != nullptr) creation_reason->reset();
   try {
     if (!model || model->empty()) {
+      set_creation_reason(creation_reason, CreationReason::package_corrupt);
       return runtime_failure<std::unique_ptr<OnnxSession>>(
           ErrorCode::invalid_model_bundle, "ONNX model bytes are empty");
     }
@@ -142,19 +188,39 @@ Result<std::unique_ptr<OnnxSession>> OnnxSession::create(
     options.SetInterOpNumThreads(static_cast<int>(config.inter_op_threads));
     options.SetExecutionMode(config.inter_op_threads > 1 ? ORT_PARALLEL : ORT_SEQUENTIAL);
     options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+    if (config.provider == ExecutionProvider::webgpu) {
+#if defined(LIGHT_OCR_HAS_WEBGPU)
+      options.DisableMemPattern();
+      if (config.cpu_partition == CpuPartition::forbid) {
+        options.AddConfigEntry(kOrtSessionOptionsDisableCPUEPFallback, "1");
+      }
+      add_webgpu_session_config_entries(options);
+      options.AppendExecutionProvider("WebGPU", {});
+#else
+      set_creation_reason(creation_reason,
+                          CreationReason::provider_abi_mismatch);
+      return runtime_failure<std::unique_ptr<OnnxSession>>(
+          ErrorCode::unsupported_capability,
+          "The WebGPU provider is unavailable in this build");
+#endif
+    }
     auto session = std::make_unique<Ort::Session>(environment(), model->data(), model->size(), options);
     validate_model_contract(*session, kind, expected_recognition_classes);
     Ort::AllocatorWithDefaultOptions allocator;
     auto input_name = session->GetInputNameAllocated(0, allocator);
     auto output_name = session->GetOutputNameAllocated(0, allocator);
     if (!input_name || !output_name || input_name.get()[0] == '\0' || output_name.get()[0] == '\0') {
+      set_creation_reason(creation_reason,
+                          CreationReason::model_compute_unsupported);
       return runtime_failure<std::unique_ptr<OnnxSession>>(
           ErrorCode::unsupported_model, "Model input or output name is empty");
     }
     return Result<std::unique_ptr<OnnxSession>>::success(std::unique_ptr<OnnxSession>(
         new OnnxSession(std::move(session), input_name.get(), output_name.get(),
-                        make_execution_info(config))));
+                        make_execution_info(config, kind))));
   } catch (const std::invalid_argument& exception) {
+    set_creation_reason(creation_reason,
+                        CreationReason::internal_assertion_failed);
     return runtime_failure<std::unique_ptr<OnnxSession>>(
         ErrorCode::invalid_argument, "ONNX Runtime session options are invalid",
         exception.what());
@@ -162,9 +228,20 @@ Result<std::unique_ptr<OnnxSession>> OnnxSession::create(
     return runtime_failure<std::unique_ptr<OnnxSession>>(
         ErrorCode::runtime_initialization_failed, "ONNX Runtime failed to create a session",
         exception.what());
+  } catch (const ModelContractError& exception) {
+    set_creation_reason(creation_reason,
+                        CreationReason::model_compute_unsupported);
+    return runtime_failure<std::unique_ptr<OnnxSession>>(
+        ErrorCode::unsupported_model, "ONNX model contract validation failed",
+        exception.what());
+  } catch (const std::bad_alloc&) {
+    return runtime_failure<std::unique_ptr<OnnxSession>>(
+        ErrorCode::resource_limit_exceeded,
+        "Host memory allocation failed during ONNX Runtime initialization");
   } catch (const std::exception& exception) {
     return runtime_failure<std::unique_ptr<OnnxSession>>(
-        ErrorCode::unsupported_model, "ONNX model contract validation failed", exception.what());
+        ErrorCode::internal_error, "Unexpected ONNX Runtime initialization failure",
+        exception.what());
   } catch (...) {
     return runtime_failure<std::unique_ptr<OnnxSession>>(
         ErrorCode::internal_error, "Unknown ONNX Runtime initialization failure");

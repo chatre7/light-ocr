@@ -48,6 +48,7 @@ struct InferenceSessionConfig {
   std::string model_id;
   std::string model_sha256;
   std::string shape_policy;
+  std::string qualification_id;
   std::optional<AppleModelPackage> apple_package;
   std::string requested_provider_override;
   bool session_fallback_used = false;

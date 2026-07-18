@@ -54,11 +54,33 @@ python3 tools/webgpu/build_runtime.py \
   --output-dir dist/webgpu-runtime
 ```
 
-The output directory is published atomically and must not already exist. It
-contains the versioned library, two relative SONAME/linker-name symlinks, and
-`artifact-manifest.json`. The manifest records the actual byte count, SHA-256,
-dynamic dependencies, source revisions, and exact upstream build arguments.
-Artifact validation fails on an unexpected SONAME, RUNPATH, or dependency.
+The output directory is published atomically and must not already exist. It is
+a matching C++ SDK containing `include/`, the versioned library and two relative
+SONAME/linker-name symlinks under `lib/`, plus `artifact-manifest.json`. The
+headers and runtime always come from the same exact ONNX Runtime checkout. The
+manifest records every regular SDK file's byte count and SHA-256, a deterministic
+header-set identity, source revisions, exact upstream build arguments, runtime
+flavor, qualification state, and the locked session options. Artifact validation
+fails on an unexpected SONAME, RUNPATH, dependency, header, or source identity.
+
+The C++ integration uses the locked generic provider API with provider name
+`WebGPU`, Vulkan, NHWC, graph capture disabled, and basic validation. `deviceId`
+is intentionally unsupported in the first product contract because ORT 1.23
+interprets it as an externally injected WebGPU context ID, not a GPU ordinal.
+
+CMake consumes this SDK only when `LIGHT_OCR_ONNXRUNTIME_FLAVOR=webgpu` and an
+explicit `LIGHT_OCR_WEBGPU_SDK_DIR` are supplied. `bootstrap_dependencies.py`
+does not download WebGPU from `models/deps.lock.json`; it reports this external,
+verified-SDK boundary and points to this builder instead. Native builds verify
+glibc from compiler headers. A verified cross toolchain must explicitly set
+`LIGHT_OCR_TARGET_LIBC=glibc`; any other value is rejected.
+
+CMake re-hashes every declared public header, verifies both relative symlink
+targets, and freezes the exact runtime and session-option identity before use. A
+pending artifact is accepted only with `LIGHT_OCR_WEBGPU_QUALIFICATION_BUILD=ON`.
+Normal release configuration and npm staging both require the manifest's exact
+production hash, `productionArtifactQualified=true`, and accepted Provider Gate;
+the current proof-of-concept manifest deliberately cannot satisfy that gate.
 
 ## Qualification boundary
 

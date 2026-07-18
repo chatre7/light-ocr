@@ -56,6 +56,27 @@ class WebGpuRuntimeContractTest(unittest.TestCase):
                 "build.upstreamArguments",
             ),
             (
+                "provider option layout",
+                lambda lock: lock["sessionOptions"]["providerOptions"].__setitem__(
+                    "preferredLayout", "NCHW"
+                ),
+                "sessionOptions",
+            ),
+            (
+                "provider name",
+                lambda lock: lock["sessionOptions"].__setitem__(
+                    "providerName", "WebGpuExecutionProvider"
+                ),
+                "sessionOptions",
+            ),
+            (
+                "device ID support",
+                lambda lock: lock["sessionOptions"].__setitem__(
+                    "deviceIdSupported", True
+                ),
+                "sessionOptions",
+            ),
+            (
                 "dependency allowlist",
                 lambda lock: lock["artifacts"]["allowedDynamicDependencies"].append(
                     "libcuda.so.1"
@@ -119,6 +140,22 @@ class WebGpuRuntimeContractTest(unittest.TestCase):
                 mutate(lock)
                 with self.assertRaisesRegex(build_runtime.ContractError, error):
                     build_runtime.validate_lock(lock)
+
+    def test_cmake_freezes_webgpu_sdk_release_boundary(self) -> None:
+        dependencies = (ROOT / "cmake" / "Dependencies.cmake").read_text("utf-8")
+        required = [
+            "LIGHT_OCR_ONNXRUNTIME_FLAVOR",
+            "LIGHT_OCR_WEBGPU_SDK_DIR",
+            "LIGHT_OCR_WEBGPU_QUALIFICATION_BUILD",
+            "linux-x64-gnu-webgpu-ort-1.23.0-monolithic-v1",
+            "be835efc56aca19b8e810538ec93c8e150e0fc61",
+            "productionArtifactQualified",
+            "providerGatePassed",
+            "LIGHT_OCR_HAS_WEBGPU=1",
+        ]
+        for token in required:
+            with self.subTest(token=token):
+                self.assertIn(token, dependencies)
 
     def test_host_validation_rejects_non_linux(self) -> None:
         with self.assertRaisesRegex(build_runtime.ContractError, "requires Linux"):
@@ -261,7 +298,10 @@ class WebGpuRuntimeContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "source"
-            source.mkdir()
+            headers = source / "include" / "onnxruntime" / "core" / "session"
+            headers.mkdir(parents=True)
+            for name in lock["artifacts"]["publicHeaders"]:
+                (headers / name).write_text(f"// {name}\n", "utf-8")
             library = root / "built.so"
             library.write_bytes(b"runtime")
             output = root / "output"
@@ -273,12 +313,15 @@ class WebGpuRuntimeContractTest(unittest.TestCase):
                 )
             self.assertEqual(manifest_path, output / "artifact-manifest.json")
             self.assertEqual(
-                (output / "libonnxruntime.so").readlink(), Path("libonnxruntime.so.1")
+                (output / "lib" / "libonnxruntime.so").readlink(),
+                Path("libonnxruntime.so.1"),
             )
             self.assertEqual(
-                (output / "libonnxruntime.so.1").readlink(),
+                (output / "lib" / "libonnxruntime.so.1").readlink(),
                 Path("libonnxruntime.so.1.23.0"),
             )
+            self.assertTrue((output / "include" / "onnxruntime_cxx_api.h").is_file())
+            self.assertTrue((output / "include" / "onnxruntime_ep_c_api.h").is_file())
             manifest = json.loads(manifest_path.read_text("utf-8"))
             self.assertEqual(
                 manifest["qualification"]["status"], "proof-of-concept-only"
@@ -295,6 +338,17 @@ class WebGpuRuntimeContractTest(unittest.TestCase):
                 manifest["qualification"]["productionArtifactQualified"]
             )
             self.assertEqual(manifest["sources"]["onnxruntimeCommit"], expected)
+            self.assertEqual(manifest["runtimeFlavor"], "webgpu")
+            self.assertEqual(manifest["sessionOptions"], lock["sessionOptions"])
+            self.assertEqual(
+                manifest["headers"]["onnxruntimeCommit"],
+                lock["sources"]["onnxruntime"]["commit"],
+            )
+            self.assertEqual(
+                len(manifest["headers"]["files"]),
+                len(lock["artifacts"]["publicHeaders"]),
+            )
+            self.assertEqual(manifest["artifact"]["filename"], "lib/libonnxruntime.so.1.23.0")
 
     def test_stage_failure_does_not_publish_partial_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

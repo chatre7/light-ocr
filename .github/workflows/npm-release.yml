@@ -165,6 +165,7 @@ jobs:
           python tools/npm_release.py stage-native \
             --platform-id "${{ matrix.id }}" \
             --build-dir build-npm \
+            --configuration Release \
             --metadata-dir "reports/npm/${{ matrix.id }}" \
             --output-dir "dist/native-input/${{ matrix.id }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

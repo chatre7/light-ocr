@@ -30,18 +30,21 @@ PLATFORMS: dict[str, dict[str, Any]] = {
         "package": "@arcships/light-ocr-darwin-arm64",
         "os": ["darwin"],
         "cpu": ["arm64"],
+        "architecture": "arm64",
         "runtime": "libonnxruntime.1.22.0.dylib",
     },
     "macos-x64": {
         "package": "@arcships/light-ocr-darwin-x64",
         "os": ["darwin"],
         "cpu": ["x64"],
+        "architecture": "x86_64",
         "runtime": "libonnxruntime.1.22.0.dylib",
     },
     "linux-x64": {
         "package": "@arcships/light-ocr-linux-x64-gnu",
         "os": ["linux"],
         "cpu": ["x64"],
+        "architecture": "x86_64",
         "libc": ["glibc"],
         "runtime": "libonnxruntime.so.1",
     },
@@ -49,6 +52,7 @@ PLATFORMS: dict[str, dict[str, Any]] = {
         "package": "@arcships/light-ocr-win32-x64",
         "os": ["win32"],
         "cpu": ["x64"],
+        "architecture": "x86_64",
         "runtime": "onnxruntime.dll",
     },
 }
@@ -93,16 +97,355 @@ def reject_symlinks(root: Path) -> None:
             raise RuntimeError(f"package staging contains a symlink: {path}")
 
 
-def build_file(build: Path, filename: str) -> Path:
-    candidates = [
-        build / "bin" / filename,
-        build / "bin" / "Release" / filename,
-        build / "Release" / filename,
-    ]
-    for candidate in candidates:
+def cmake_is_multi_config(build: Path) -> bool:
+    cache = build / "CMakeCache.txt"
+    if not cache.is_file():
+        return False
+    for line in cache.read_text("utf-8", errors="replace").splitlines():
+        if line.startswith("CMAKE_CONFIGURATION_TYPES:"):
+            return bool(line.partition("=")[2])
+    return False
+
+
+def build_file(build: Path, filename: str, configuration: str) -> Path:
+    if not isinstance(configuration, str) or not re.fullmatch(
+        r"[A-Za-z0-9_.+-]+", configuration
+    ):
+        raise RuntimeError("build configuration is invalid")
+    if cmake_is_multi_config(build):
+        candidate = build / "bin" / configuration / filename
         if candidate.is_file():
             return candidate
+        raise RuntimeError(
+            f"{configuration} build output is missing: {filename}"
+        )
+    candidate = build / "bin" / filename
+    if candidate.is_file():
+        return candidate
     raise RuntimeError(f"build output is missing: {filename}")
+
+
+def safe_package_path(value: object, field: str) -> PurePosixPath:
+    if not isinstance(value, str) or not value:
+        raise RuntimeError(f"{field} must be a non-empty package-relative path")
+    path = PurePosixPath(value)
+    if path.is_absolute() or ".." in path.parts or not path.parts:
+        raise RuntimeError(f"{field} must be a safe package-relative path")
+    return path
+
+
+def file_record(path: Path, package_root: Path) -> dict[str, Any]:
+    if not path.is_file() or path.is_symlink():
+        raise RuntimeError(f"runtime payload must be a regular file: {path}")
+    return {
+        "path": path.relative_to(package_root).as_posix(),
+        "bytes": path.stat().st_size,
+        "sha256": sha256(path),
+    }
+
+
+def validate_file_record(record: object, package_root: Path, field: str) -> Path:
+    if not isinstance(record, dict):
+        raise RuntimeError(f"{field} must be an object")
+    relative = safe_package_path(record.get("path"), f"{field}.path")
+    path = package_root.joinpath(*relative.parts)
+    try:
+        path.resolve().relative_to(package_root.resolve())
+    except ValueError as exception:
+        raise RuntimeError(f"{field}.path escapes the package") from exception
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"descriptor artifact is missing or not a regular file: {relative}")
+    if type(record.get("bytes")) is not int or path.stat().st_size != record["bytes"]:
+        raise RuntimeError(f"descriptor artifact byte count mismatch: {relative}")
+    digest = record.get("sha256")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise RuntimeError(f"descriptor artifact hash is invalid: {relative}")
+    if sha256(path) != digest:
+        raise RuntimeError(f"descriptor artifact hash mismatch: {relative}")
+    return path
+
+
+def validate_runtime_descriptor(
+    descriptor: object,
+    package_root: Path,
+    *,
+    platform_id: str | None = None,
+    require_released: bool = False,
+) -> None:
+    if not isinstance(descriptor, dict) or descriptor.get("schemaVersion") != "1.0":
+        raise RuntimeError("runtime descriptor schemaVersion must be 1.0")
+    platform = descriptor.get("platform")
+    if not isinstance(platform, dict) or not isinstance(platform.get("id"), str):
+        raise RuntimeError("runtime descriptor platform is invalid")
+    if platform_id is not None and platform.get("id") != platform_id:
+        raise RuntimeError("runtime descriptor platform identity mismatch")
+    qualification_only = descriptor.get("qualificationOnly")
+    released = descriptor.get("released")
+    if type(qualification_only) is not bool or type(released) is not bool:
+        raise RuntimeError("runtime descriptor release flags must be booleans")
+    if qualification_only == released:
+        raise RuntimeError(
+            "runtime descriptor must be either released or qualification-only"
+        )
+    if require_released and (qualification_only or not released):
+        raise RuntimeError("qualification-only runtime descriptor cannot enter npm release")
+    policy = descriptor.get("autoPolicy")
+    if not isinstance(policy, dict) or not isinstance(policy.get("id"), str):
+        raise RuntimeError("runtime descriptor Auto policy is invalid")
+    providers = policy.get("providers")
+    if not isinstance(providers, list) or not providers or providers[-1] != "cpu":
+        raise RuntimeError("runtime descriptor Auto policy must be non-empty and end in cpu")
+    if qualification_only and providers != ["cpu"]:
+        raise RuntimeError("qualification descriptor released Auto policy must remain cpu-only")
+    provider_records = descriptor.get("providers")
+    if not isinstance(provider_records, dict) or "cpu" not in provider_records:
+        raise RuntimeError("runtime descriptor must declare the CPU provider")
+    if (
+        len(providers) != len(set(providers))
+        or any(provider not in provider_records for provider in providers)
+    ):
+        raise RuntimeError("runtime descriptor Auto policy providers are invalid")
+    runtime = descriptor.get("runtime")
+    expected_runtime = {
+        "cpu": ("onnxruntime-cpu", "1.22.0", "onnxruntime-c-api-22"),
+        "webgpu": (
+            "onnxruntime-monolithic-webgpu",
+            "1.23.0",
+            "onnxruntime-c-api-23",
+        ),
+    }
+    if not isinstance(runtime, dict) or runtime.get("flavor") not in expected_runtime:
+        raise RuntimeError("runtime descriptor ABI identity is invalid")
+    if tuple(runtime.get(field) for field in ("kind", "version", "abi")) != expected_runtime[
+        runtime["flavor"]
+    ]:
+        raise RuntimeError("runtime descriptor ABI identity is invalid")
+    if platform_id is not None:
+        expected_policy = (
+            ["cpu"]
+            if qualification_only
+            else ["apple", "cpu"]
+            if platform_id.startswith("macos-")
+            else ["webgpu", "cpu"]
+            if runtime["flavor"] == "webgpu"
+            else ["cpu"]
+        )
+        expected_available = (
+            {"cpu", "webgpu"}
+            if runtime["flavor"] == "webgpu"
+            else {"apple", "cpu"}
+            if platform_id.startswith("macos-")
+            else {"cpu"}
+        )
+        if providers != expected_policy or set(provider_records) != expected_available:
+            raise RuntimeError(
+                "runtime descriptor providers disagree with platform capabilities"
+            )
+    addon = descriptor.get("addon")
+    validate_file_record(addon, package_root, "addon")
+    referenced: set[str] = {addon["path"]}
+    for provider_id, provider in provider_records.items():
+        if (
+            provider_id not in {"cpu", "apple", "webgpu"}
+            or not isinstance(provider, dict)
+        ):
+            raise RuntimeError("runtime descriptor provider entry is invalid")
+        if not isinstance(provider.get("qualificationId"), str) or not provider[
+            "qualificationId"
+        ]:
+            raise RuntimeError(f"provider {provider_id} has no qualification identity")
+        artifacts = provider.get("artifacts")
+        if not isinstance(artifacts, list) or not artifacts:
+            raise RuntimeError(f"provider {provider_id} has no runtime artifacts")
+        for index, artifact in enumerate(artifacts):
+            validate_file_record(
+                artifact, package_root, f"providers.{provider_id}.artifacts[{index}]"
+            )
+            referenced.add(artifact["path"])
+        if provider_id == "webgpu":
+            compatibility = provider.get("compatibilityManifest")
+            compatibility_path = validate_file_record(
+                compatibility, package_root, "providers.webgpu.compatibilityManifest"
+            )
+            if compatibility["path"] not in {
+                artifact.get("path") for artifact in artifacts if isinstance(artifact, dict)
+            }:
+                raise RuntimeError(
+                    "WebGPU compatibility manifest must be part of provider artifacts"
+                )
+            runtime_artifacts = [
+                artifact
+                for artifact in artifacts
+                if isinstance(artifact, dict)
+                and artifact.get("path") != compatibility["path"]
+            ]
+            try:
+                compatibility_data = read_json(compatibility_path)
+            except (OSError, json.JSONDecodeError) as exception:
+                raise RuntimeError(
+                    "WebGPU compatibility manifest is unreadable"
+                ) from exception
+            expected_compatibility = {
+                "schemaVersion": "1.0",
+                "provider": "webgpu",
+                "platformId": platform["id"],
+                "runtimeVersion": runtime["version"],
+                "runtimeAbi": runtime["abi"],
+                "qualificationId": provider.get("qualificationId"),
+                "qualificationOnly": qualification_only,
+                "released": released,
+                "runtimeArtifact": (
+                    {
+                        "bytes": runtime_artifacts[0].get("bytes"),
+                        "sha256": runtime_artifacts[0].get("sha256"),
+                    }
+                    if len(runtime_artifacts) == 1
+                    else None
+                ),
+            }
+            if compatibility_data != expected_compatibility:
+                raise RuntimeError(
+                    "WebGPU compatibility manifest does not match the runtime descriptor"
+                )
+    native = package_root / "native"
+    actual = {
+        path.relative_to(package_root).as_posix()
+        for path in native.rglob("*")
+        if path.is_file()
+        and path.relative_to(package_root).as_posix()
+        != "native/runtime-descriptor.json"
+    }
+    if actual != referenced:
+        raise RuntimeError(
+            "runtime descriptor payload inventory mismatch: "
+            f"missing={sorted(referenced - actual)}, extra={sorted(actual - referenced)}"
+        )
+
+
+def _webgpu_manifest(arguments: argparse.Namespace) -> tuple[dict[str, Any], Path, dict[str, Any]]:
+    manifest_path = getattr(arguments, "webgpu_artifact_manifest", None)
+    compatibility_path = getattr(arguments, "webgpu_compatibility_manifest", None)
+    if manifest_path is None or compatibility_path is None:
+        raise RuntimeError("WebGPU staging requires artifact and compatibility manifests")
+    manifest_path = Path(manifest_path).absolute()
+    compatibility_path = Path(compatibility_path).absolute()
+    if (
+        manifest_path.is_symlink()
+        or not manifest_path.is_file()
+        or compatibility_path.is_symlink()
+        or not compatibility_path.is_file()
+    ):
+        raise RuntimeError(
+            "WebGPU artifact and compatibility manifests must be regular files"
+        )
+    manifest = read_json(manifest_path)
+    compatibility = read_json(compatibility_path)
+    if manifest.get("contractId") != "linux-x64-gnu-webgpu-ort-1.23.0-monolithic-v1":
+        raise RuntimeError("WebGPU artifact manifest contract ID mismatch")
+    if manifest.get("runtimeFlavor") != "webgpu":
+        raise RuntimeError("WebGPU artifact manifest runtime flavor mismatch")
+
+    headers = manifest.get("headers")
+    expected_headers = [
+        "onnxruntime_c_api.h",
+        "onnxruntime_cxx_api.h",
+        "onnxruntime_cxx_inline.h",
+        "onnxruntime_float16.h",
+        "onnxruntime_run_options_config_keys.h",
+        "onnxruntime_session_options_config_keys.h",
+    ]
+    if (
+        not isinstance(headers, dict)
+        or headers.get("directory") != "include"
+        or headers.get("onnxruntimeVersion") != "1.23.0"
+        or headers.get("onnxruntimeCommit")
+        != "be835efc56aca19b8e810538ec93c8e150e0fc61"
+        or not isinstance(headers.get("files"), list)
+        or len(headers["files"]) != len(expected_headers)
+    ):
+        raise RuntimeError("WebGPU SDK header identity does not match locked ORT 1.23")
+    for expected_name, record in zip(expected_headers, headers["files"], strict=True):
+        if not isinstance(record, dict) or record.get("path") != f"include/{expected_name}":
+            raise RuntimeError("WebGPU SDK header inventory is unsafe or out of order")
+        validate_file_record(record, manifest_path.parent, f"headers.{expected_name}")
+
+    expected_session_options = {
+        "providerName": "WebGPU",
+        "providerOptions": {
+            "dawnBackendType": "Vulkan",
+            "preferredLayout": "NHWC",
+            "enableGraphCapture": "0",
+            "validationMode": "basic",
+        },
+        "deviceIdSupported": False,
+    }
+    if manifest.get("sessionOptions") != expected_session_options:
+        raise RuntimeError("WebGPU SDK session options do not match the locked contract")
+
+    artifact = manifest.get("artifact")
+    if (
+        not isinstance(artifact, dict)
+        or artifact.get("filename") != "lib/libonnxruntime.so.1.23.0"
+    ):
+        raise RuntimeError("WebGPU artifact manifest has no locked runtime artifact")
+    source = manifest_path.parent / artifact["filename"]
+    if not source.is_file() or source.is_symlink():
+        raise RuntimeError("WebGPU artifact manifest runtime is missing")
+    actual_sha = sha256(source)
+    if artifact.get("bytes") != source.stat().st_size or artifact.get("sha256") != actual_sha:
+        raise RuntimeError("WebGPU artifact manifest runtime identity mismatch")
+
+    qualification = manifest.get("qualification", {})
+    if not isinstance(qualification, dict):
+        raise RuntimeError("WebGPU artifact qualification must be an object")
+    hash_status = qualification.get("productionHashStatus")
+    gate = qualification.get("providerGatePassed")
+    artifact_qualified = qualification.get("productionArtifactQualified")
+    production_sha = qualification.get("productionSha256")
+    qualification_build = bool(getattr(arguments, "qualification_build", False))
+    if qualification_build:
+        if hash_status != "pending" or gate is not False or artifact_qualified is not False:
+            raise RuntimeError("WebGPU qualification artifact must remain pending and unqualified")
+    elif (
+        hash_status != "qualified"
+        or gate is not True
+        or artifact_qualified is not True
+        or production_sha != actual_sha
+    ):
+        raise RuntimeError(
+            "WebGPU release staging requires a qualified production artifact and exact production hash"
+        )
+    qualification_id = qualification.get("evidenceId")
+    expected_compatibility = {
+        "schemaVersion": "1.0",
+        "provider": "webgpu",
+        "platformId": "linux-x64",
+        "runtimeVersion": "1.23.0",
+        "runtimeAbi": "onnxruntime-c-api-23",
+        "qualificationId": qualification_id,
+        "qualificationOnly": qualification_build,
+        "released": not qualification_build,
+        "runtimeArtifact": {
+            "bytes": source.stat().st_size,
+            "sha256": actual_sha,
+        },
+    }
+    if (
+        not isinstance(qualification_id, str)
+        or not qualification_id
+        or not isinstance(compatibility, dict)
+        or set(compatibility) != set(expected_compatibility)
+        or not isinstance(compatibility.get("runtimeArtifact"), dict)
+        or set(compatibility["runtimeArtifact"]) != {"bytes", "sha256"}
+        or any(
+            compatibility.get(field) != value
+            for field, value in expected_compatibility.items()
+        )
+    ):
+        raise RuntimeError(
+            "WebGPU compatibility manifest does not match the staged runtime contract"
+        )
+    return manifest, compatibility_path, compatibility
 
 
 def stage_native(arguments: argparse.Namespace) -> None:
@@ -110,32 +453,122 @@ def stage_native(arguments: argparse.Namespace) -> None:
     build = arguments.build_dir.resolve()
     metadata = arguments.metadata_dir.resolve()
     output = arguments.output_dir.resolve()
+    runtime_flavor = getattr(arguments, "runtime_flavor", "cpu")
+    qualification_build = bool(getattr(arguments, "qualification_build", False))
+    configuration = getattr(arguments, "configuration", "Release")
+    if runtime_flavor not in {"cpu", "webgpu"}:
+        raise RuntimeError("runtime flavor must be cpu or webgpu")
+    if runtime_flavor == "webgpu" and arguments.platform_id != "linux-x64":
+        raise RuntimeError("WebGPU runtime staging is limited to Linux x64 glibc")
     remove_and_create(output)
 
     native = output / "native"
     native.mkdir()
-    copy_file(build_file(build, "light_ocr_node.node"), native / "light_ocr_node.node")
-    copy_file(build_file(build, platform["runtime"]), native / platform["runtime"])
+    addon = native / "light_ocr_node.node"
+    copy_file(build_file(build, "light_ocr_node.node", configuration), addon)
+
+    qualification_only = False
+    released = True
+    runtime_version = "1.22.0"
+    runtime_kind = "onnxruntime-cpu"
+    runtime_abi = "onnxruntime-c-api-22"
+    provider_entries: dict[str, Any]
+    if runtime_flavor == "cpu":
+        runtime = native / platform["runtime"]
+        copy_file(build_file(build, platform["runtime"], configuration), runtime)
+        runtime_record = file_record(runtime, output)
+        provider_entries = {
+            "cpu": {
+                "runtimeProvider": "CPUExecutionProvider",
+                "qualificationId": "cpu-baseline-v1",
+                "artifacts": [runtime_record],
+            }
+        }
+        if platform["os"] == ["darwin"]:
+            provider_entries["apple"] = {
+                "runtimeProvider": "CoreML",
+                "qualificationId": "apple-open-macos-v1",
+                # Core ML is an OS framework; its provider implementation is
+                # linked into the addon rather than staged as another runtime.
+                "artifacts": [file_record(addon, output)],
+            }
+    else:
+        manifest, compatibility_source, compatibility = _webgpu_manifest(arguments)
+        artifact = manifest["artifact"]
+        runtime = native / "libonnxruntime.so.1"
+        copy_file(Path(arguments.webgpu_artifact_manifest).resolve().parent / artifact["filename"], runtime)
+        compatibility_path = native / "webgpu-compatibility.json"
+        copy_file(compatibility_source, compatibility_path)
+        runtime_record = file_record(runtime, output)
+        compatibility_record = file_record(compatibility_path, output)
+        qualification = manifest.get("qualification", {})
+        qualification_id = qualification.get("evidenceId", "unqualified-webgpu")
+        qualification_only = qualification_build
+        released = not qualification_only
+        runtime_version = "1.23.0"
+        runtime_kind = "onnxruntime-monolithic-webgpu"
+        runtime_abi = "onnxruntime-c-api-23"
+        provider_entries = {
+            "webgpu": {
+                "runtimeProvider": "WebGpuExecutionProvider",
+                "qualificationId": qualification_id,
+                "compatibilityManifest": compatibility_record,
+                "artifacts": [runtime_record, compatibility_record],
+            },
+            "cpu": {
+                "runtimeProvider": "CPUExecutionProvider",
+                "qualificationId": "cpu-baseline-v1",
+                "artifacts": [runtime_record],
+            },
+        }
+
     copy_file(metadata / "license-inventory.json", output / "license-inventory.json")
     copy_file(metadata / "sbom.spdx.json", output / "sbom.spdx.json")
     shutil.copytree(metadata / "licenses", output / "licenses")
 
+    descriptor = {
+        "schemaVersion": "1.0",
+        "platform": {
+            "id": arguments.platform_id,
+            "os": platform["os"][0],
+            "architecture": platform["architecture"],
+            **({"libc": platform["libc"][0]} if "libc" in platform else {}),
+        },
+        "runtime": {
+            "flavor": runtime_flavor,
+            "kind": runtime_kind,
+            "version": runtime_version,
+            "abi": runtime_abi,
+        },
+        "qualificationOnly": qualification_only,
+        "released": released,
+        "autoPolicy": {
+            "id": f"{arguments.platform_id}-v1",
+            "version": 1,
+            "providers": ["cpu"] if qualification_only else (
+                ["webgpu", "cpu"]
+                if runtime_flavor == "webgpu"
+                else (["apple", "cpu"] if platform["os"] == ["darwin"] else ["cpu"])
+            ),
+        },
+        "providers": provider_entries,
+        "addon": file_record(addon, output),
+    }
+    write_json(native / "runtime-descriptor.json", descriptor)
+    validate_runtime_descriptor(descriptor, output, platform_id=arguments.platform_id)
+
     records = []
     for path in sorted(output.rglob("*")):
         if path.is_file():
-            records.append(
-                {
-                    "path": path.relative_to(output).as_posix(),
-                    "bytes": path.stat().st_size,
-                    "sha256": sha256(path),
-                }
-            )
+            records.append(file_record(path, output))
     write_json(
         output / "native-input.json",
         {
             "schemaVersion": "1.0",
             "platformId": arguments.platform_id,
             "package": platform["package"],
+            "runtimeFlavor": runtime_flavor,
+            "qualificationOnly": qualification_only,
             "files": records,
         },
     )
@@ -350,6 +783,15 @@ def assemble(arguments: argparse.Namespace) -> None:
         descriptor = read_json(source / "native-input.json")
         if descriptor.get("platformId") != platform_id:
             raise RuntimeError(f"native input identity mismatch for {platform_id}")
+        runtime_descriptor_path = source / "native" / "runtime-descriptor.json"
+        if not runtime_descriptor_path.is_file():
+            raise RuntimeError(f"runtime descriptor is missing for {platform_id}")
+        runtime_descriptor = read_json(runtime_descriptor_path)
+        validate_runtime_descriptor(
+            runtime_descriptor, source, platform_id=platform_id, require_released=True
+        )
+        if descriptor.get("qualificationOnly") is not False:
+            raise RuntimeError("qualification-only native input cannot enter npm release")
         package = output / platform_id
         package.mkdir()
         copy_tree(source / "native", package / "native")
@@ -665,8 +1107,13 @@ def main() -> int:
     native = subparsers.add_parser("stage-native")
     native.add_argument("--platform-id", choices=sorted(PLATFORMS), required=True)
     native.add_argument("--build-dir", type=Path, required=True)
+    native.add_argument("--configuration", default="Release")
     native.add_argument("--metadata-dir", type=Path, required=True)
     native.add_argument("--output-dir", type=Path, required=True)
+    native.add_argument("--runtime-flavor", choices=["cpu", "webgpu"], default="cpu")
+    native.add_argument("--webgpu-artifact-manifest", type=Path)
+    native.add_argument("--webgpu-compatibility-manifest", type=Path)
+    native.add_argument("--qualification-build", action="store_true")
     native.set_defaults(handler=stage_native)
 
     assembly = subparsers.add_parser("assemble")

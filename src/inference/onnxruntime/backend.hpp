@@ -12,11 +12,14 @@
 
 namespace light_ocr::internal {
 
+void add_webgpu_session_config_entries(Ort::SessionOptions& options);
+
 class OnnxSession final : public InferenceSession {
  public:
   static Result<std::unique_ptr<OnnxSession>> create(
       const SharedBytes& model, const InferenceSessionConfig& config, ModelKind kind,
-      std::size_t expected_recognition_classes = 0);
+      std::size_t expected_recognition_classes = 0,
+      std::optional<CreationReason>* creation_reason = nullptr);
 
   Result<TensorOutput> run(const std::vector<float>& values,
                            const std::vector<std::int64_t>& shape) noexcept override;

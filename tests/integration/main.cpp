@@ -17,6 +17,27 @@
 #include "light_ocr/core.hpp"
 
 int main() {
+  try {
+    Ort::SessionOptions webgpu_options;
+    light_ocr::internal::add_webgpu_session_config_entries(webgpu_options);
+    const std::vector<std::pair<const char*, const char*>> expected_webgpu_config{
+        {"ep.webgpuexecutionprovider.dawnBackendType", "Vulkan"},
+        {"ep.webgpuexecutionprovider.preferredLayout", "NHWC"},
+        {"ep.webgpuexecutionprovider.enableGraphCapture", "0"},
+        {"ep.webgpuexecutionprovider.validationMode", "basic"},
+    };
+    for (const auto& entry : expected_webgpu_config) {
+      if (!webgpu_options.HasConfigEntry(entry.first) ||
+          webgpu_options.GetConfigEntry(entry.first) != entry.second) {
+        std::cerr << "WebGPU session config entry mismatch: " << entry.first << '\n';
+        return 1;
+      }
+    }
+  } catch (const std::exception& exception) {
+    std::cerr << "failed to inspect WebGPU session config: " << exception.what() << '\n';
+    return 1;
+  }
+
   const char* bundle_path = std::getenv("LIGHT_OCR_MODEL_BUNDLE");
   if (bundle_path == nullptr || bundle_path[0] == '\0') {
     std::cout << "SKIP LIGHT_OCR_MODEL_BUNDLE is not set\n";
@@ -39,6 +60,7 @@ int main() {
     detection_config.model_id = "integration-detection";
     detection_config.model_sha256 = std::string(64, '0');
     detection_config.shape_policy = "dynamic";
+    detection_config.qualification_id = "integration-cpu-v1";
     auto recognition_config = detection_config;
     recognition_config.model_id = "integration-recognition";
     auto corrupt_session = light_ocr::internal::OnnxSession::create(
@@ -99,16 +121,44 @@ int main() {
       return 1;
     }
     const auto& execution = engine.value()->info().execution;
-    if (execution.requested_provider != light_ocr::ExecutionProvider::cpu ||
+#if defined(LIGHT_OCR_HAS_WEBGPU)
+    const bool provider_capabilities_valid =
+        execution.provider_capabilities.size() == 2 &&
+        execution.provider_capabilities[0].provider == "cpu" &&
+        execution.provider_capabilities[0].package_included &&
+        execution.provider_capabilities[0].device_available &&
+        execution.provider_capabilities[0].device_validated &&
+        execution.provider_capabilities[1].provider == "webgpu" &&
+        execution.provider_capabilities[1].package_included &&
+        !execution.provider_capabilities[1].device_available &&
+        !execution.provider_capabilities[1].device_validated;
+#else
+    const bool provider_capabilities_valid =
+        execution.provider_capabilities.size() == 1 &&
+        execution.provider_capabilities.front().provider == "cpu" &&
+        execution.provider_capabilities.front().package_included &&
+        execution.provider_capabilities.front().device_available &&
+        execution.provider_capabilities.front().device_validated;
+#endif
+    if (execution.requested_provider != light_ocr::ExecutionProvider::automatic ||
+        execution.selection_trace.requested_provider != "auto" ||
+        execution.selection_trace.policy_id !=
+            std::optional<std::string>{"builtin-cpu-v1"} ||
+        execution.selection_trace.policy_version !=
+            std::optional<std::uint32_t>{1} ||
+        execution.selection_trace.ordered_candidates !=
+            std::vector<std::string>{"cpu"} ||
+        execution.selection_trace.attempts.size() != 1 ||
+        execution.selection_trace.attempts.front().provider != "cpu" ||
+        execution.selection_trace.attempts.front().status !=
+            light_ocr::CreationAttemptStatus::selected ||
+        execution.selection_trace.selected_provider !=
+            std::optional<std::string>{"cpu"} ||
         execution.session_fallback != light_ocr::SessionFallback::error ||
         execution.cpu_partition != light_ocr::CpuPartition::allow ||
         execution.performance_hint != light_ocr::PerformanceHint::latency ||
         execution.requested_precision != light_ocr::Precision::automatic ||
-        execution.provider_capabilities.size() != 1 ||
-        execution.provider_capabilities.front().provider != "cpu" ||
-        !execution.provider_capabilities.front().package_included ||
-        !execution.provider_capabilities.front().device_available ||
-        !execution.provider_capabilities.front().device_validated ||
+        !provider_capabilities_valid ||
         execution.detection.actual_provider_chain !=
             std::vector<std::string>{"CPUExecutionProvider"} ||
         execution.recognition.actual_provider_chain !=

@@ -78,7 +78,18 @@
       "ld-linux-x86-64.so.2"
     ],
     "productionSha256": null,
-    "productionHashStatus": "pending"
+    "productionHashStatus": "pending",
+    "includeDirectory": "include",
+    "libraryDirectory": "lib",
+    "publicHeaders": [
+      "onnxruntime_c_api.h",
+      "onnxruntime_cxx_api.h",
+      "onnxruntime_cxx_inline.h",
+      "onnxruntime_ep_c_api.h",
+      "onnxruntime_float16.h",
+      "onnxruntime_run_options_config_keys.h",
+      "onnxruntime_session_options_config_keys.h"
+    ]
   },
   "qualification": {
     "status": "proof-of-concept-only",
@@ -91,5 +102,15 @@
       "Recognition partitions Slice.2, Concat.2, and Gather to CPU; cpuPartition=forbid fails.",
       "The production artifact SHA-256 is intentionally unset until a release builder produces and qualifies an artifact."
     ]
+  },
+  "sessionOptions": {
+    "providerName": "WebGPU",
+    "providerOptions": {
+      "dawnBackendType": "Vulkan",
+      "preferredLayout": "NHWC",
+      "enableGraphCapture": "0",
+      "validationMode": "basic"
+    },
+    "deviceIdSupported": false
   }
 }

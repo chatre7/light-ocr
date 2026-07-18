@@ -45,14 +45,23 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(Dependencies)
 light_ocr_configure_dependencies()
 
-# Keep project executables in one predictable directory for both single- and
-# multi-configuration generators. This also gives staged ONNX Runtime files a
-# stable package location on Windows.
+# Keep single-configuration executables in one predictable directory and
+# isolate multi-configuration outputs so concurrent Debug/Release builds cannot
+# overwrite each other's binaries or staged ONNX Runtime files.
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-foreach(_light_ocr_configuration DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
-  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${_light_ocr_configuration}
-      "${CMAKE_BINARY_DIR}/bin")
-endforeach()
+get_property(_light_ocr_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(_light_ocr_multi_config)
+  foreach(_light_ocr_configuration IN LISTS CMAKE_CONFIGURATION_TYPES)
+    string(TOUPPER "${_light_ocr_configuration}" _light_ocr_configuration_upper)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${_light_ocr_configuration_upper}
+        "${CMAKE_BINARY_DIR}/bin/${_light_ocr_configuration}")
+  endforeach()
+else()
+  foreach(_light_ocr_configuration DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${_light_ocr_configuration}
+        "${CMAKE_BINARY_DIR}/bin")
+  endforeach()
+endif()
 
 if(NOT MSVC)
   if(LIGHT_OCR_ENABLE_SANITIZERS)
@@ -66,10 +75,12 @@ endif()
 
 add_library(light_ocr_core STATIC
   src/core/engine.cpp
+  src/core/engine_factory.hpp
   src/detection/db_postprocess.cpp
   src/detection/tiled.cpp
   src/geometry/geometry.cpp
   src/inference/onnxruntime/backend.cpp
+  src/inference/selection.hpp
   src/model/model_bundle.cpp
   src/preprocess/image.cpp
   src/preprocess/tensor.cpp
@@ -112,6 +123,9 @@ if(APPLE)
 endif()
 
 target_compile_definitions(light_ocr_core PRIVATE LIGHT_OCR_VERSION="${PROJECT_VERSION}")
+if(LIGHT_OCR_HAS_WEBGPU)
+  target_compile_definitions(light_ocr_core PRIVATE LIGHT_OCR_HAS_WEBGPU=1)
+endif()
 
 if(MSVC)
   target_compile_options(light_ocr_core PRIVATE /W4 /WX /permissive- /EHsc /fp:strict)
@@ -175,6 +189,7 @@ if(LIGHT_OCR_BUILD_TESTS)
     tests/unit/test_image.cpp
     tests/unit/test_model_bundle.cpp
     tests/unit/test_result.cpp
+    tests/unit/test_selection.cpp
     tests/unit/test_sha256.cpp
   )
   target_link_libraries(light_ocr_unit_tests PRIVATE light_ocr::core nlohmann_json::nlohmann_json
