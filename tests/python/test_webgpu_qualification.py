@@ -56,9 +56,15 @@ def report(
         },
         "warmup": 2,
         "iterations": 10,
-        "cycles": 1,
-        "engineInitializationUs": {"minimum": 1000, "p50": 1000, "maximum": 1000},
+        "cycles": 3,
+        "engineInitializationUs": {
+            "minimum": 1000,
+            "p50": 1000,
+            "maximum": 1000,
+            "values": [1000, 1000, 1000],
+        },
         "firstPredictionUs": 2000,
+        "firstPredictionUsByCycle": [2000, 2000, 2000],
         "lifecycle": {
             "residentMinimumBytes": 100 * 1024 * 1024,
             "residentMaximumBytes": 110 * 1024 * 1024,
@@ -69,13 +75,13 @@ def report(
 
 
 class WebGpuQualificationTest(unittest.TestCase):
-    def test_qualification_rejects_tracked_source_changes(self) -> None:
+    def test_qualification_rejects_source_changes(self) -> None:
         completed = subprocess.CompletedProcess(
             args=["git", "status"], returncode=0, stdout=" M src/core/engine.cpp\n"
         )
         with mock.patch.object(qualify.subprocess, "run", return_value=completed):
             with self.assertRaisesRegex(
-                qualify.QualificationError, "clean tracked source tree"
+                qualify.QualificationError, "clean source tree"
             ):
                 qualify.require_clean_source()
 
@@ -241,10 +247,38 @@ class WebGpuQualificationTest(unittest.TestCase):
                     "source": "synthetic",
                     "adapters": [{"driver": "test", "driverVersion": "1.0"}],
                 },
+                rebuilt_from_source=True,
                 required_fixtures=("generated-hello-123",),
             )
             self.assertTrue(evidence["passed"])
             self.assertTrue(all(gate["passed"] for gate in evidence["gates"]))
+
+            reused_evidence = qualify.collect_evidence(
+                platform_id="linux-x64",
+                sdk=sdk,
+                native=native,
+                cases=cases,
+                profiles=profiles,
+                graphics={
+                    "source": "synthetic",
+                    "adapters": [{"driver": "test", "driverVersion": "1.0"}],
+                },
+                rebuilt_from_source=False,
+                required_fixtures=("generated-hello-123",),
+            )
+            self.assertFalse(reused_evidence["passed"])
+            self.assertEqual(
+                next(
+                    gate
+                    for gate in reused_evidence["gates"]
+                    if gate["name"] == "build-provenance"
+                ),
+                {
+                    "name": "build-provenance",
+                    "passed": False,
+                    "detail": "--skip-build reused prior outputs; diagnostic evidence cannot qualify a release",
+                },
+            )
 
 
 if __name__ == "__main__":

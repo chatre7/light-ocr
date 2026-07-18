@@ -35,13 +35,16 @@ DEFAULT_FIXTURES = (
     "paddleocr-xfund-form",
 )
 MAX_COLD_START_US = 30_000_000
+MAX_NATIVE_PAYLOAD_BYTES = 256 * 1024 * 1024
 MAX_RESIDENT_BYTES = 2 * 1024 * 1024 * 1024
 MAX_RETAINED_GROWTH_BYTES = 128 * 1024 * 1024
 MAX_FIXTURE_P95_RATIO = 3.0
 MIN_AGGREGATE_P50_SPEEDUP = 1.1
 MIN_TARGET_FIXTURE_SPEEDUP = 1.5
 MIN_TARGET_FIXTURE_COUNT = 2
-MIN_MEASUREMENT_ITERATIONS = 10
+MIN_MEASUREMENT_SAMPLES = 30
+MIN_MEASUREMENT_ITERATIONS_PER_CYCLE = 10
+MIN_COLD_START_CYCLES = 3
 MIN_LIFECYCLE_CYCLES = 20
 
 
@@ -62,7 +65,7 @@ def source_revision() -> str:
 
 def require_clean_source() -> None:
     status = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=no"],
+        ["git", "status", "--porcelain", "--untracked-files=all"],
         cwd=ROOT,
         check=True,
         capture_output=True,
@@ -71,8 +74,8 @@ def require_clean_source() -> None:
     ).stdout.strip()
     if status:
         raise QualificationError(
-            "qualification requires a clean tracked source tree so the report is "
-            "bound to one Git revision"
+            "qualification requires a clean source tree so the report is bound "
+            "to one Git revision"
         )
 
 
@@ -443,6 +446,7 @@ def collect_evidence(
     cases: dict[str, dict[str, Any]],
     profiles: dict[str, dict[str, Any]],
     graphics: dict[str, Any],
+    rebuilt_from_source: bool,
     required_fixtures: tuple[str, ...] = DEFAULT_FIXTURES,
 ) -> dict[str, Any]:
     gates: list[dict[str, Any]] = []
@@ -452,13 +456,30 @@ def collect_evidence(
 
     manifest_path = sdk / "artifact-manifest.json"
     descriptor_path = native / "native" / "runtime-descriptor.json"
+    native_payload_bytes = sum(
+        path.stat().st_size for path in (native / "native").rglob("*") if path.is_file()
+    )
     manifest = json.loads(manifest_path.read_text("utf-8"))
     descriptor = json.loads(descriptor_path.read_text("utf-8"))
+    gate(
+        "build-provenance",
+        rebuilt_from_source,
+        (
+            "runtime and addon rebuilt from the reported source revision"
+            if rebuilt_from_source
+            else "--skip-build reused prior outputs; diagnostic evidence cannot qualify a release"
+        ),
+    )
     gate(
         "runtime-contract",
         manifest.get("contractId") == "native-webgpu-plugin-0.1.0-ort-1.24.4-v1"
         and descriptor.get("runtime", {}).get("kind") == "onnxruntime-plugin-webgpu",
         f"contract={manifest.get('contractId')}, runtime={descriptor.get('runtime', {}).get('kind')}",
+    )
+    gate(
+        "native-payload-size",
+        0 < native_payload_bytes <= MAX_NATIVE_PAYLOAD_BYTES,
+        f"bytes={native_payload_bytes}, ceiling={MAX_NATIVE_PAYLOAD_BYTES}",
     )
     graphics_adapters = graphics.get("adapters")
     graphics_identity_valid = (
@@ -506,9 +527,10 @@ def collect_evidence(
         )
 
     node_measurements_valid = all(
-        integer_at_least(report.get("iterations"), MIN_MEASUREMENT_ITERATIONS)
+        integer_at_least(report.get("iterations"), MIN_MEASUREMENT_ITERATIONS_PER_CYCLE)
         and integer_at_least(report.get("warmup"), 2)
-        and report.get("cycles") == 1
+        and integer_at_least(report.get("cycles"), MIN_COLD_START_CYCLES)
+        and report["iterations"] * report["cycles"] >= MIN_MEASUREMENT_SAMPLES
         for key, report in cases.items()
         if key.endswith((":cpu", ":allow", ":strict", ":auto"))
         and key != "native-cpp:auto"
@@ -521,21 +543,25 @@ def collect_evidence(
         and integer_at_least(lifecycle_measurement.get("iterations"), 1)
         and integer_at_least(lifecycle_measurement.get("cycles"), MIN_LIFECYCLE_CYCLES)
         and integer_at_least(
-            cpp_measurement.get("iterations"), MIN_MEASUREMENT_ITERATIONS
+            cpp_measurement.get("iterations"), MIN_MEASUREMENT_ITERATIONS_PER_CYCLE
         )
         and integer_at_least(cpp_measurement.get("warmup"), 1),
-        f"nodeIterations>={MIN_MEASUREMENT_ITERATIONS}, "
+        f"nodeSamples>={MIN_MEASUREMENT_SAMPLES}, "
+        f"nodeColdStartCycles>={MIN_COLD_START_CYCLES}, "
         f"lifecycleCycles={lifecycle_measurement.get('cycles')}, "
         f"cppIterations={cpp_measurement.get('iterations')}",
     )
     auto = cases.get("generated-hello-123:auto", {})
     trace = auto.get("engine", {}).get("execution", {}).get("selectionTrace", {})
+    auto_chains = session_chains(auto)
     gate(
         "d112-auto",
         auto.get("ok") is True
+        and auto.get("engine", {}).get("executionProvider") == "WebGpuExecutionProvider"
+        and auto_chains == [["WebGpuExecutionProvider", "CPUExecutionProvider"]] * 2
         and trace.get("orderedCandidates") == ["webgpu", "cpu"]
         and trace.get("selectedProvider") == "webgpu",
-        json.dumps(trace, sort_keys=True),
+        f"trace={json.dumps(trace, sort_keys=True)}, chains={auto_chains}",
     )
     cpu_p50_total = 0.0
     webgpu_p50_total = 0.0
@@ -543,6 +569,19 @@ def collect_evidence(
     target_speedup_count = 0
     for fixture in observed_fixtures:
         cpu = cases.get(f"{fixture}:cpu", {})
+        cpu_chains = session_chains(cpu)
+        gate(
+            f"{fixture}-cpu-provider",
+            cpu.get("ok") is True
+            and cpu.get("engine", {}).get("executionProvider") == "CPUExecutionProvider"
+            and cpu_chains == [["CPUExecutionProvider"]] * 2,
+            f"chains={cpu_chains}",
+        )
+        gate(
+            f"{fixture}-cpu-determinism",
+            cpu.get("result", {}).get("deterministic") is True,
+            f"sha256={cpu.get('result', {}).get('sha256')}",
+        )
         for mode in ("allow", "strict"):
             report = cases.get(f"{fixture}:{mode}", {})
             chains = session_chains(report)
@@ -659,20 +698,34 @@ def collect_evidence(
             and 0 < maximum_resident <= MAX_RESIDENT_BYTES,
             f"residentMaximumBytes={maximum_resident}",
         )
-    for mode in ("allow", "strict", "auto"):
+    for mode in ("cpu", "allow", "strict", "auto"):
         key = f"generated-hello-123:{mode}"
         report = cases.get(key, {})
-        initialization = report.get("engineInitializationUs", {}).get("maximum")
-        first_prediction = report.get("firstPredictionUs")
-        cold_start = (
-            initialization + first_prediction
-            if isinstance(initialization, int) and isinstance(first_prediction, int)
-            else 0
+        initialization_values = report.get("engineInitializationUs", {}).get("values")
+        first_prediction_values = report.get("firstPredictionUsByCycle")
+        cold_starts = (
+            [
+                initialization + first_prediction
+                for initialization, first_prediction in zip(
+                    initialization_values, first_prediction_values, strict=True
+                )
+                if isinstance(initialization, int)
+                and not isinstance(initialization, bool)
+                and initialization > 0
+                and isinstance(first_prediction, int)
+                and not isinstance(first_prediction, bool)
+                and first_prediction > 0
+            ]
+            if isinstance(initialization_values, list)
+            and isinstance(first_prediction_values, list)
+            and len(initialization_values) == len(first_prediction_values)
+            else []
         )
         gate(
             f"{key}-cold-start",
-            0 < cold_start <= MAX_COLD_START_US,
-            f"coldStartUs={cold_start}",
+            len(cold_starts) >= MIN_COLD_START_CYCLES
+            and max(cold_starts) <= MAX_COLD_START_US,
+            f"coldStartUs={cold_starts}",
         )
     for key, summary in profiles.items():
         webgpu_nodes = summary.get("nodeCounts", {}).get("WebGpuExecutionProvider", 0)
@@ -701,12 +754,18 @@ def collect_evidence(
         "evidenceId": manifest.get("qualification", {}).get("evidenceId"),
         "platformId": platform_id,
         "sourceRevision": source_revision(),
+        "buildProvenance": {
+            "rebuiltFromSource": rebuilt_from_source,
+            "qualificationEligible": rebuilt_from_source,
+        },
         "sdk": {
             "manifestSha256": sha256(manifest_path),
             "artifactSetSha256": manifest["artifacts"]["artifactSetSha256"],
         },
         "nativePackage": {
             "descriptorSha256": sha256(descriptor_path),
+            "payloadBytes": native_payload_bytes,
+            "payloadCeilingBytes": MAX_NATIVE_PAYLOAD_BYTES,
         },
         "host": {
             **cases.get("generated-hello-123:auto", {}).get("host", {}),
@@ -757,7 +816,7 @@ def main() -> int:
     ).resolve()
     logs = output / "logs"
     sdk = work / "sdk"
-    build = work / "build"
+    build = work / "build" / source_revision()
     metadata = work / "metadata"
     native = work / "native-package"
     profiles_dir = output / "profiles"
@@ -965,7 +1024,7 @@ def main() -> int:
                     "--warmup",
                     "2",
                     "--cycles",
-                    "1",
+                    str(MIN_COLD_START_CYCLES),
                     "--report",
                     str(report_path),
                 ],
@@ -1114,6 +1173,7 @@ def main() -> int:
         cases=cases,
         profiles=profiles,
         graphics=graphics,
+        rebuilt_from_source=not arguments.skip_build,
     )
     report_path = output / "qualification-report.json"
     write_text_atomic(

@@ -164,7 +164,7 @@ PP-OCRv6 ONNX
 - graph capture 关闭；只有引入静态 bucket 且全 graph placement 后才独立研究。
 - preprocess、DB postprocess、crop、CTC decode 保持 CPU；I/O Binding 留到 profiler 证明 copy 是主要瓶颈之后。
 - 禁止运行期 inference failure 自动重试 CPU。
-- 默认一键套件覆盖锁定 14-fixture corpus、CPU/allow/strict、Auto、ORT node placement、2 次 warmup + 10 次测量、20 次 engine lifecycle、质量容差、冷启动、RSS 与性能门槛；报告、profiles 和日志均绑定 SHA-256。
+- 默认一键套件覆盖锁定 14-fixture corpus、CPU/allow/strict、Auto、ORT node placement；每个正常 case 固定 3 次独立 engine cold start、每次 2 次 warmup + 10 次测量（合计 30 次），另做 20 次 engine lifecycle，并检查质量容差、冷启动、RSS、256 MiB 解包 native payload 与性能门槛；报告带 sidecar SHA-256，报告内记录 profile hashes，原始 cases、profiles 和日志一并保留。
 
 ### 5.3 风险等级
 

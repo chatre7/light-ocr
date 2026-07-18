@@ -81,6 +81,7 @@ async function main() {
   }[arguments_.mode];
   const times = [];
   const initializationTimes = [];
+  const firstPredictionTimes = [];
   const hashes = [];
   const rss = [];
   let firstLines;
@@ -90,6 +91,7 @@ async function main() {
   const cpuStart = process.cpuUsage();
   const wallStart = performance.now();
   for (let cycle = 0; cycle < arguments_.cycles; ++cycle) {
+    let cycleFirstPredictionUs;
     const initializationBegin = performance.now();
     const engine = await createEngine({
       bundlePath: path.resolve(arguments_.bundle),
@@ -103,6 +105,7 @@ async function main() {
         const result = await engine.recognize(image, { includeDiagnostics: true });
         const elapsed = Math.round((performance.now() - begin) * 1000);
         firstPredictionUs ??= elapsed;
+        cycleFirstPredictionUs ??= elapsed;
         const lines = normalizedLines(result);
         firstLines ??= lines;
         hashes.push(digest(lines));
@@ -113,6 +116,7 @@ async function main() {
         const result = await engine.recognize(image, { includeDiagnostics: true });
         const elapsed = Math.round((performance.now() - begin) * 1000);
         firstPredictionUs ??= elapsed;
+        cycleFirstPredictionUs ??= elapsed;
         times.push(elapsed);
         const lines = normalizedLines(result);
         firstLines ??= lines;
@@ -122,6 +126,7 @@ async function main() {
     } finally {
       await engine.close();
     }
+    firstPredictionTimes.push(cycleFirstPredictionUs);
     rss.push(process.memoryUsage().rss);
   }
   const wallUs = Math.round((performance.now() - wallStart) * 1000);
@@ -163,8 +168,10 @@ async function main() {
       minimum: Math.min(...initializationTimes),
       p50: percentile(initializationTimes, 0.5),
       maximum: Math.max(...initializationTimes),
+      values: initializationTimes,
     },
     firstPredictionUs,
+    firstPredictionUsByCycle: firstPredictionTimes,
     processCpuUs,
     measuredWallUs: wallUs,
     averageProcessCpuCores: wallUs > 0 ? processCpuUs / wallUs : 0,

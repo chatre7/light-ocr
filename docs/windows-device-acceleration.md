@@ -439,13 +439,13 @@ Windows 与 Apple 使用同一份用户可读 scoreboard：
 
 Windows provider 继承 Roadmap PG，并增加以下要求：
 
-- 默认 one-command suite 覆盖锁定 14-fixture corpus；至少两个 fixture P50 speedup ≥1.5，P50 总和 speedup ≥1.1，任一 fixture WebGPU P95 ≤CPU 3×；
+- 默认 one-command suite 覆盖锁定 14-fixture corpus，每个正常 case 执行 3 次独立 engine cold start、每次 2 次 warmup + 10 次测量（合计 30 次）；至少两个 fixture P50 speedup ≥1.5，P50 总和 speedup ≥1.1，任一 fixture WebGPU P95 ≤CPU 3×；
 - OCR process CPU-s/average cores 进入报告和发布范围审查，不使用 runner 未强制的目标冒充自动 Gate；
 - qualification 中禁止未声明 CPU EP fallback，关键 graph placement 达到预注册要求；
 - 公共 contract 100% 通过，FP16/INT8/BF16 的质量容差在查看最终性能前锁定；
 - canary initialization + first result ≤30 s、resident maximum ≤2 GiB、20 次 lifecycle retained growth 绝对值 ≤128 MiB；device memory/driver 范围由真机报告补充；
 - device unavailable、driver 不兼容、cache 损坏、device lost 和 session failure 都有稳定行为；
-- Windows platform/provider payload 保持完全离线，dynamic catalog profile 除外且必须由宿主显式授权。
+- Windows platform/provider payload 保持完全离线且解包后的自包含 native payload ≤256 MiB，dynamic catalog profile 除外且必须由宿主显式授权。
 
 ## 12. 分阶段落地
 

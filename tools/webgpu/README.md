@@ -110,17 +110,20 @@ python3 tools/webgpu/qualify.py
 ```
 
 The runner bootstraps pinned dependencies/models, assembles and validates the
-host SDK, builds the qualification addon and C++ tools, runs hardware-independent
-CTest, stages the exact npm payload, and then exercises:
+host SDK, uses a revision-keyed build directory when compiling the qualification
+addon and C++ tools, runs hardware-independent CTest, stages the exact npm
+payload, and then exercises:
 
 - Node CPU, WebGPU allow, WebGPU strict, and D112 Auto;
 - direct C++ D112 Auto and adjacent-plugin discovery;
 - the complete locked 14-fixture parity/quality corpus, including sparse,
   dense, multilingual, rotated, handwriting, and low-contrast inputs;
-- deterministic repeated inference and 20 engine create/close cycles;
+- at least 3 independent cold starts, 30 measured predictions per normal case,
+  deterministic inference, and 20 dedicated engine create/close cycles;
 - CPU-vs-WebGPU text, confidence, and box parity;
 - per-fixture P95 regression, aggregate P50 speedup, cold-start, and 2 GiB
   resident-memory ceilings fixed before device results are observed;
+- an unpacked self-contained native payload ceiling of 256 MiB;
 - ORT profiling evidence for real `WebGpuExecutionProvider` node placement,
   including zero CPU nodes in strict mode.
 
@@ -129,15 +132,19 @@ Outputs are written to
 sidecar SHA-256, raw cases, profiles, and command logs. A nonzero exit means at
 least one Provider Gate failed; the report is still retained.
 
-The production Gate is fixed to all 14 fixtures, at least 10 measured runs per
-normal case, and 20 create/close lifecycle cycles. Reduced `--fixture`,
+The production Gate is fixed to all 14 fixtures, 3 independent cold starts and
+at least 30 measured predictions per normal case, plus 20 dedicated create/close
+lifecycle cycles. Reduced `--fixture`,
 `--iterations`, or `--cycles` values remain useful for diagnosis, but the
-resulting report cannot set `passed: true` and cannot qualify a release.
+resulting report cannot set `passed: true` and cannot qualify a release. The
+same rule applies to `--skip-build`: it can quickly reproduce device behavior,
+but only a fresh build from the reported clean source revision is qualification
+eligible.
 
 Useful options:
 
 ```bash
-# Reuse a complete prior build and rerun only device evidence.
+# Reuse a complete prior build for diagnosis; this report cannot pass the Gate.
 python3 tools/webgpu/qualify.py --skip-build
 
 # Fully offline rebuild after caches and Node development files exist.
