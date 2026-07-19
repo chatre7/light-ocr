@@ -970,6 +970,8 @@ def main() -> int:
         configure = ["cmake", "-S", str(ROOT), "-B", str(build)]
         if platform_id == "linux-x64":
             configure += ["-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release"]
+        elif os.environ.get("LIGHT_OCR_QUALIFY_GENERATOR") == "Ninja":
+            configure += ["-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release"]
         else:
             configure += ["-G", "Visual Studio 17 2022", "-A", "x64"]
         configure += [
@@ -1051,7 +1053,7 @@ def main() -> int:
         native / "native" / "runtime-descriptor.json",
         build
         / "bin"
-        / ("Release" if platform_id == "windows-x64" else "")
+        / ("Release" if platform_id == "windows-x64" and os.environ.get("LIGHT_OCR_QUALIFY_GENERATOR") != "Ninja" else "")
         / (
             "light_ocr_benchmark.exe"
             if platform_id == "windows-x64"
@@ -1189,7 +1191,7 @@ def main() -> int:
     benchmark = (
         build
         / "bin"
-        / ("Release" if platform_id == "windows-x64" else "")
+        / ("Release" if platform_id == "windows-x64" and os.environ.get("LIGHT_OCR_QUALIFY_GENERATOR") != "Ninja" else "")
         / (
             "light_ocr_benchmark.exe"
             if platform_id == "windows-x64"
