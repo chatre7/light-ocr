@@ -185,7 +185,7 @@ class NpmReleaseTests(unittest.TestCase):
             staging = root / "staging"
             npm_release.assemble(
                 argparse.Namespace(
-                    version="0.2.1",
+                    version="0.3.0",
                     bundle=bundle,
                     native_root=native_root,
                     output_dir=staging,
@@ -194,7 +194,7 @@ class NpmReleaseTests(unittest.TestCase):
             facade = json.loads(
                 (staging / "facade" / "package.json").read_text("utf-8")
             )
-            self.assertEqual(facade["dependencies"][npm_release.MODEL_PACKAGE], "0.2.1")
+            self.assertEqual(facade["dependencies"][npm_release.MODEL_PACKAGE], "0.3.0")
             self.assertEqual(len(facade["optionalDependencies"]), 4)
             model = json.loads(
                 (staging / "model-ppocrv6-small" / "package.json").read_text("utf-8")
@@ -210,7 +210,7 @@ class NpmReleaseTests(unittest.TestCase):
             release = json.loads(
                 (tarballs / "release-manifest.json").read_text("utf-8")
             )
-            self.assertEqual(release["version"], "0.2.1")
+            self.assertEqual(release["version"], "0.3.0")
             self.assertEqual(len(release["packages"]), 6)
             self.assertEqual(len(list(tarballs.glob("*.tgz"))), 6)
 

@@ -7,6 +7,7 @@ export type ExecutionProvider = 'auto' | 'cpu' | 'apple' | 'webgpu';
 export type SessionFallback = 'error' | 'cpu';
 export type CpuPartition = 'allow' | 'forbid';
 export type PerformanceHint = 'latency' | 'throughput';
+/** WebGPU accepts auto/fp32; fp16 is reserved for the Apple provider. */
 export type Precision = 'auto' | 'fp32' | 'fp16';
 
 export interface DetectionOptions {

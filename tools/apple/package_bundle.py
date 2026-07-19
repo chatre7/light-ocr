@@ -194,7 +194,7 @@ def main() -> int:
         ):
             raise RuntimeError("base bundle does not contain the WebGPU FP16 contract")
         manifest["bundleId"] = output.name
-        manifest["coreCompatibility"]["minimum"] = "0.2.1"
+        manifest["coreCompatibility"]["minimum"] = "0.3.0"
         manifest["providers"]["apple"] = {
             "schemaVersion": "1.1",
             "minimumMacOS": "15.0",

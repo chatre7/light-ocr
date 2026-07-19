@@ -136,7 +136,7 @@ def package_bundle(base: Path, output: Path) -> None:
 
         base_manifest["schemaVersion"] = "1.2"
         base_manifest["bundleId"] = output.name
-        base_manifest["coreCompatibility"]["minimum"] = "0.2.1"
+        base_manifest["coreCompatibility"]["minimum"] = "0.3.0"
         provider_models: dict[str, object] = {}
         for kind, short in (("detection", "det"), ("recognition", "rec")):
             source_model = base_manifest["models"][kind]

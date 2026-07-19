@@ -96,8 +96,7 @@ bool valid_execution_options(const ExecutionOptions& options) {
            (options.cpu_partition == CpuPartition::allow ||
             options.cpu_partition == CpuPartition::forbid) &&
            (options.precision == Precision::automatic ||
-            options.precision == Precision::fp32 ||
-            options.precision == Precision::fp16);
+            options.precision == Precision::fp32);
   }
   return options.provider == ExecutionProvider::apple &&
          !options.device_id.has_value() &&
@@ -930,28 +929,6 @@ Result<std::unique_ptr<Engine>> internal::EngineFactory::create(
                 candidate_detection_config.webgpu_device_validated;
             auto candidate_detection_bytes = detection_bytes;
             auto candidate_recognition_bytes = recognition_bytes;
-            if (created.provider == ExecutionProvider::webgpu &&
-                options.execution.precision == Precision::fp16) {
-              if (!bundle.data_->webgpu_provider) {
-                return fail(
-                    Error{ErrorCode::unsupported_capability,
-                          "The model bundle does not include WebGPU FP16 models",
-                          {}},
-                    CreationReason::model_compute_unsupported);
-              }
-              const auto& webgpu = *bundle.data_->webgpu_provider;
-              candidate_detection_bytes =
-                  bundle.data_->files.at(webgpu.detection.model_path);
-              candidate_recognition_bytes =
-                  bundle.data_->files.at(webgpu.recognition.model_path);
-              candidate_detection_config.model_id = webgpu.detection.model_id;
-              candidate_detection_config.model_sha256 =
-                  webgpu.detection.model_sha256;
-              candidate_recognition_config.model_id =
-                  webgpu.recognition.model_id;
-              candidate_recognition_config.model_sha256 =
-                  webgpu.recognition.model_sha256;
-            }
             std::optional<CreationReason> creation_reason;
             auto candidate_detection = internal::OnnxSession::create(
                 candidate_detection_bytes, candidate_detection_config,

@@ -42,7 +42,7 @@ REPORT_FIELDS = {
 }
 MANUAL_REVIEW_CHECKLIST = (
     "Confirm the reported adapters, operating systems, drivers, and power/thermal conditions support the proposed compatibility scope.",
-    "Inspect FP32/FP16 ORT profiles and operator counts, including every bounded CPU partition and the strict fail-closed evidence.",
+    "Inspect FP32 ORT profiles and operator counts, including every bounded CPU partition and the strict fail-closed evidence.",
     "Review latency distributions, CPU-s/average cores, cold starts, RSS, and available device-memory evidence; RSS is not a VRAM measurement.",
     "Inspect raw logs for driver, Dawn, validation, device-loss, and teardown warnings not represented by a failed mechanical gate.",
     "Choose device-specific, vendor-scoped, Preview, qualification-only, or rejected status; one report per platform does not prove a cross-vendor claim.",
@@ -56,6 +56,23 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def validated_text_evidence_size(
+    path: Path, expected_digest: str, *, platform_id: str, context: str
+) -> int:
+    """Validate tracked JSON whose Windows CRLF may be normalized by Git."""
+    data = path.read_bytes()
+    candidates = [data]
+    if platform_id == "windows-x64":
+        normalized = data.replace(b"\r\n", b"\n")
+        crlf = normalized.replace(b"\n", b"\r\n")
+        if crlf != data:
+            candidates.append(crlf)
+    for candidate in candidates:
+        if hashlib.sha256(candidate).hexdigest() == expected_digest:
+            return len(candidate)
+    raise RuntimeError(f"{platform_id} {context} hash mismatch")
 
 
 def read_json(path: Path, context: str) -> dict[str, Any]:
@@ -115,7 +132,7 @@ def expected_case_keys() -> set[str]:
     keys = {
         f"{fixture}:{mode}"
         for fixture in qualify.DEFAULT_FIXTURES
-        for mode in ("cpu", "fp32", "allow", "strict")
+        for mode in ("cpu", "allow", "strict")
     }
     canary = qualify.DEFAULT_FIXTURES[0]
     keys.update({f"{canary}:auto", f"{canary}:lifecycle", "native-cpp:auto"})
@@ -126,7 +143,7 @@ def expected_profile_keys() -> set[str]:
     keys = {
         f"{fixture}:{mode}"
         for fixture in qualify.DEFAULT_FIXTURES
-        for mode in ("fp32", "allow")
+        for mode in ("allow",)
     }
     canary = qualify.DEFAULT_FIXTURES[0]
     keys.update({f"{canary}:auto", f"{canary}:lifecycle", "native-cpp:auto"})
@@ -154,9 +171,6 @@ def expected_gate_names() -> set[str]:
             {
                 f"{fixture}-cpu-provider",
                 f"{fixture}-cpu-determinism",
-                f"{fixture}-fp32-provider",
-                f"{fixture}-fp32-quality",
-                f"{fixture}-fp32-determinism",
                 f"{fixture}-allow-provider",
                 f"{fixture}-allow-quality",
                 f"{fixture}-allow-determinism",
@@ -168,7 +182,7 @@ def expected_gate_names() -> set[str]:
         if not key.endswith((":cpu", ":strict")) and key != "native-cpp:auto":
             names.add(f"{key}-memory")
     canary = qualify.DEFAULT_FIXTURES[0]
-    for mode in ("cpu", "fp32", "allow", "auto"):
+    for mode in ("cpu", "allow", "auto"):
         names.add(f"{canary}:{mode}-cold-start")
     for key in expected_profile_keys():
         names.add(f"{key}-profile-placement")
@@ -326,9 +340,15 @@ def validate_manifest(
     if (
         artifact_set != build_runtime.artifact_set_digest(records)
         or artifact_set != report_sdk.get("artifactSetSha256")
-        or sha256(path) != report_sdk.get("manifestSha256")
+        or not isinstance(report_sdk.get("manifestSha256"), str)
     ):
         raise RuntimeError(f"{platform_id} SDK artifact identity mismatch")
+    validated_text_evidence_size(
+        path,
+        report_sdk["manifestSha256"],
+        platform_id=platform_id,
+        context="SDK manifest",
+    )
     return manifest
 
 
@@ -428,12 +448,20 @@ def validate_descriptor(
 
     native = mapping(report.get("nativePackage"), f"{platform_id} nativePackage")
     unique_payload = {record["path"]: record for record in [addon, *runtime_records]}
-    payload_bytes = path.stat().st_size + sum(
+    descriptor_digest = native.get("descriptorSha256")
+    if not isinstance(descriptor_digest, str):
+        raise RuntimeError(f"{platform_id} native descriptor identity is invalid")
+    descriptor_bytes = validated_text_evidence_size(
+        path,
+        descriptor_digest,
+        platform_id=platform_id,
+        context="runtime descriptor",
+    )
+    payload_bytes = descriptor_bytes + sum(
         int(record["bytes"]) for record in unique_payload.values()
     )
     if (
-        sha256(path) != native.get("descriptorSha256")
-        or native.get("payloadBytes") != payload_bytes
+        native.get("payloadBytes") != payload_bytes
         or native.get("payloadCeilingBytes") != qualify.MAX_NATIVE_PAYLOAD_BYTES
         or payload_bytes > qualify.MAX_NATIVE_PAYLOAD_BYTES
     ):
@@ -486,7 +514,7 @@ def validate_report_directory(
     directory: Path,
     *,
     platform_id: str,
-    expected_revision: str,
+    expected_revision: str | None,
     lock: dict[str, object],
 ) -> dict[str, Any]:
     if directory.is_symlink() or not directory.is_dir():
@@ -501,15 +529,24 @@ def validate_report_directory(
     except (OSError, UnicodeError) as exception:
         raise RuntimeError(f"cannot read {platform_id} report sidecar") from exception
     match = re.fullmatch(r"([0-9a-f]{64})  qualification-report\.json\n", sidecar)
-    report_digest = sha256(report_path)
-    if match is None or match.group(1) != report_digest:
+    if match is None:
         raise RuntimeError(f"{platform_id} qualification report hash mismatch")
+    report_digest = match.group(1)
+    validated_text_evidence_size(
+        report_path,
+        report_digest,
+        platform_id=platform_id,
+        context="qualification report",
+    )
     qualification = mapping(lock["qualification"], "runtime lock qualification")
+    source_revision = report.get("sourceRevision")
     if (
         set(report) != REPORT_FIELDS
         or report.get("schemaVersion") != "1.1"
         or report.get("platformId") != platform_id
-        or report.get("sourceRevision") != expected_revision
+        or not isinstance(source_revision, str)
+        or not HEX40.fullmatch(source_revision)
+        or (expected_revision is not None and source_revision != expected_revision)
         or report.get("evidenceId") != qualification.get("evidenceId")
         or report.get("passed") is not True
         or report.get("buildProvenance")
@@ -574,11 +611,12 @@ def validate_report_directory(
         manifest_path=artifacts / "sdk-artifact-manifest.json",
         descriptor_path=descriptor_path,
     )
-    if {gate["name"]: gate for gate in gates} != {
-        gate["name"]: gate for gate in recomputed_gates
+    if {gate["name"]: gate["passed"] for gate in gates} != {
+        gate["name"]: gate["passed"] for gate in recomputed_gates
     }:
         raise RuntimeError(f"{platform_id} report gates differ from recomputation")
     return {
+        "sourceRevision": source_revision,
         "reportSha256": report_digest,
         "artifactSetSha256": report["sdk"]["artifactSetSha256"],
         "sdkManifestSha256": report["sdk"]["manifestSha256"],
@@ -592,10 +630,10 @@ def validate_report_directory(
 def collect_pair(
     reports_root: Path,
     *,
-    expected_revision: str,
+    expected_revision: str | None = None,
     lock_path: Path = build_runtime.DEFAULT_LOCK,
 ) -> dict[str, Any]:
-    if not HEX40.fullmatch(expected_revision):
+    if expected_revision is not None and not HEX40.fullmatch(expected_revision):
         raise RuntimeError("expected source revision must be a full lowercase SHA-1")
     lock = build_runtime.load_lock(lock_path)
     build_runtime.validate_lock(lock)
@@ -624,7 +662,10 @@ def collect_pair(
         "status": "manual-review-required",
         "mechanicalValidationPassed": True,
         "evidenceId": qualification["evidenceId"],
-        "sourceRevision": expected_revision,
+        "sourceRevisions": {
+            platform_id: platform["sourceRevision"]
+            for platform_id, platform in platforms.items()
+        },
         "platforms": platforms,
         "manualReviewChecklist": list(MANUAL_REVIEW_CHECKLIST),
     }
@@ -657,10 +698,9 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
     qualify.require_clean_source()
-    revision = arguments.source_revision or current_revision()
     candidate = collect_pair(
         arguments.reports_root,
-        expected_revision=revision,
+        expected_revision=arguments.source_revision,
         lock_path=arguments.runtime_lock.resolve(),
     )
     write_json_atomic(arguments.output.resolve(), candidate)

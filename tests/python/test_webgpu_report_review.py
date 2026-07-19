@@ -36,11 +36,11 @@ def node_case(mode: str, chain: list[str]) -> dict[str, object]:
                 "sessions": {
                     "detection": {
                         "actualProviderChain": chain,
-                        "precision": "fp16" if mode == "allow" else "fp32",
+                        "precision": "fp32",
                     },
                     "recognition": {
                         "actualProviderChain": chain,
-                        "precision": "fp16" if mode == "allow" else "fp32",
+                        "precision": "fp32",
                     },
                 }
             },
@@ -78,9 +78,6 @@ def cases_and_profiles() -> tuple[dict[str, dict], dict[str, dict]]:
     profiles: dict[str, dict] = {}
     for fixture in qualify.DEFAULT_FIXTURES:
         cases[f"{fixture}:cpu"] = node_case("cpu", ["CPUExecutionProvider"])
-        cases[f"{fixture}:fp32"] = node_case(
-            "fp32", ["WebGpuExecutionProvider", "CPUExecutionProvider"]
-        )
         cases[f"{fixture}:allow"] = node_case(
             "allow", ["WebGpuExecutionProvider", "CPUExecutionProvider"]
         )
@@ -93,12 +90,6 @@ def cases_and_profiles() -> tuple[dict[str, dict], dict[str, dict]]:
                 "message": "The WebGPU model requires a bounded CPU operator partition",
                 "detail": "required operators: Concat, Gather, Slice",
             },
-        }
-        profiles[f"{fixture}:fp32"] = {
-            "files": [f"{fixture}-fp32.json"],
-            "fileSha256": {f"{fixture}-fp32.json": "2" * 64},
-            "nodeCounts": {"WebGpuExecutionProvider": 10},
-            "operators": {},
         }
         profiles[f"{fixture}:allow"] = {
             "files": [f"{fixture}-allow.json"],
@@ -387,6 +378,24 @@ class WebGpuReportReviewTest(unittest.TestCase):
             self.create_pair(root)
             with self.assertRaisesRegex(RuntimeError, "report identity"):
                 review_reports.collect_pair(root, expected_revision="a" * 40)
+
+    def test_collects_staggered_platform_revisions_without_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.create_pair(root)
+            report_path = root / "windows-x64" / "qualification-report.json"
+            report = json.loads(report_path.read_text("utf-8"))
+            report["sourceRevision"] = "b" * 40
+            write_json(report_path, report)
+            (report_path.parent / "qualification-report.sha256").write_text(
+                f"{review_reports.sha256(report_path)}  qualification-report.json\n",
+                "utf-8",
+            )
+            candidate = review_reports.collect_pair(root)
+            self.assertEqual(
+                candidate["sourceRevisions"],
+                {"linux-x64": self.revision, "windows-x64": "b" * 40},
+            )
 
     def test_rejects_tampered_copied_descriptor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

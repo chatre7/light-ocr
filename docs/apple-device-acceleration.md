@@ -391,7 +391,7 @@ Apple provider 继承 Roadmap Provider Gate，并增加交互式 CPU 目标：
 
 ### Phase C — W8A8 ANE qualification
 
-状态：明确延期，不属于 0.2.1 FP16 Apple provider 的完成条件，也不得借 FP16 结果宣称 INT8。
+状态：明确延期，不属于 0.3.0 FP16 Apple provider 的完成条件，也不得借 FP16 结果宣称 INT8。
 
 - 建立代表性 calibration corpus，先 PTQ 后按需要 QAT。
 - Detector 和 recognizer 分别决定是否量化。

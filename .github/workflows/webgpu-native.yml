@@ -44,6 +44,13 @@ jobs:
           tests.python.test_npm_release
           tests.python.test_webgpu_qualification
           tests.python.test_webgpu_report_review
+      - name: Validate the checked-in real-device report pair
+        if: matrix.id == 'linux-x64'
+        shell: bash
+        run: >-
+          python tools/webgpu/review_reports.py
+          --reports-root reports/webgpu-qualification
+          --output "$RUNNER_TEMP/webgpu-review-candidate.json"
       - name: Bootstrap common dependencies and model
         shell: bash
         run: |
@@ -52,7 +59,7 @@ jobs:
           python tools/bootstrap_models.py --cache-dir .cache/models
           python tools/package_model_bundle.py
           python tools/webgpu/package_bundle.py
-      - name: Reproduce the locked WebGPU FP16 models (Linux)
+      - name: Reproduce the locked internal FP16 derivations (Linux)
         if: runner.os != 'Windows'
         shell: bash
         run: |

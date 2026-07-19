@@ -6,6 +6,11 @@ integration is complete in the current source candidate; production release is
 intentionally blocked until both platform reports are reviewed and bound to the
 exact artifact sets in `runtime-lock.json`.
 
+Both checked-in real-device reports pass 164/164 Gates. The `0.3.0` public
+execution profile is FP32-only: Linux/NVIDIA Vulkan measured 5.698x aggregate
+P50 and Windows/AMD D3D12 measured 2.436x across the locked 14 fixtures. These
+numbers apply only to the recorded devices and drivers.
+
 ## Frozen runtime
 
 The product uses the official ONNX Runtime plugin topology:
@@ -20,10 +25,9 @@ The product uses the official ONNX Runtime plugin topology:
   over D3D12 and carries the plugin's `dxcompiler.dll` and `dxil.dll`.
 - The fixed session policy is NHWC, basic validation, graph capture disabled,
   high-performance power preference, and no public adapter ordinal. Auto and
-  explicit FP32 use the locked upstream models. Explicit FP16 uses deterministic
-  derived models with native float16 graph I/O and Extended graph optimization;
-  the plugin has no separate FP16 provider option, so Dawn requests `ShaderF16`
-  from a capable adapter when the FP16 graph is selected.
+  explicit WebGPU use the locked upstream FP32 models. WebGPU FP16 derivations
+  remain reproducible internal artifacts but are not a public `0.3.0` execution
+  profile; `provider=webgpu, precision=fp16` is rejected.
 - The current detector/recognizer contract requires only `Concat`, `Gather`, and
   `Slice` in the bounded CPU partition. `cpuPartition=forbid` therefore rejects
   creation with a stable `unsupported_capability` error instead of entering an
@@ -95,7 +99,7 @@ fatal and are never classified by parsing exception text.
 
 ## Hardware-independent checks
 
-The FP16 artifacts are tracked derived inputs, bound to the FP32 source hashes,
+The internal FP16 artifacts are tracked derived inputs, bound to the FP32 source hashes,
 converter versions, output hashes, and runtime contract in
 `models/bundles.lock.json`. Reproduce and functionally verify them with:
 
@@ -107,7 +111,8 @@ python3 tools/webgpu/package_bundle.py
 ```
 
 Conversion verifies ONNX topology plus deterministic FP16 CPU execution for
-both models. The WebGPU CI repeats the derivation byte-for-byte on Linux.
+both models. The WebGPU CI repeats the derivation byte-for-byte on Linux so the
+native superset bundle stays reproducible; this does not expose WebGPU FP16.
 
 ```bash
 python3 -m unittest \
@@ -136,8 +141,8 @@ host SDK, uses a revision-keyed build directory when compiling the qualification
 addon and C++ tools, runs hardware-independent CTest, stages the exact npm
 payload, and then exercises:
 
-- Node CPU FP32, explicit WebGPU FP32, explicit WebGPU FP16 allow, strict
-  fail-closed behavior, and D112 Auto (which remains FP32 for compatibility);
+- Node CPU FP32, explicit WebGPU FP32 allow, strict fail-closed behavior, and
+  D112 Auto (also FP32);
 - direct C++ D112 Auto and adjacent-plugin discovery;
 - the complete locked 14-fixture parity/quality corpus, including sparse,
   dense, multilingual, rotated, handwriting, and low-contrast inputs;
@@ -198,7 +203,7 @@ hashes and artifact-set identities can enter the production lock.
 ## Report-pair collection
 
 After copying both complete platform directories under one reports root, run the
-mechanical collector from a clean checkout of the exact qualified revision:
+mechanical collector from a clean review checkout:
 
 ```bash
 python3 tools/webgpu/review_reports.py \
@@ -206,16 +211,19 @@ python3 tools/webgpu/review_reports.py \
   --output reports/webgpu-qualification/review-candidate.json
 ```
 
-The collector defaults `sourceRevision` to the current full Git revision. It
-verifies each report sidecar; re-evaluates every Gate from the embedded raw
-cases and profile summaries; requires the exact corpus, case/profile inventory,
-and revision; and checks the copied SDK manifest and schema 2 descriptor against
+The collector preserves and binds each platform report's full `sourceRevision`;
+staggered platform runs do not need to pretend they came from one commit. Pass
+`--source-revision <sha>` only when both reports are intentionally required to
+match one exact revision. It verifies each report sidecar; re-evaluates every
+Gate outcome from the embedded raw cases and profile summaries while preserving
+the original diagnostic detail; requires the exact corpus and case/profile
+inventory; and checks the copied SDK manifest and schema 2 descriptor against
 the committed runtime lock, artifact-set hashes, provider inventory, ABI, and
 payload bytes. Both platforms must pass as one pair.
 
 A successful collector exit writes a hash-protected
 `manual-review-required` candidate. This is deliberately not an acceptance or a
 production-lock mutation. A maintainer must still inspect device/driver scope,
-ORT FP32/FP16 placement, bounded CPU partitions, strict rejection, CPU-s, latency distributions,
+ORT FP32 placement, bounded CPU partitions, strict rejection, CPU-s, latency distributions,
 cold-start, RSS/VRAM evidence, logs, and cross-vendor coverage before choosing a
 compatibility or release conclusion.

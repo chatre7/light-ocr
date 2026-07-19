@@ -239,7 +239,7 @@ std::vector<BundleFile> valid_apple_bundle_files() {
     if (file.path != "manifest.json") continue;
     auto manifest = Json::parse(std::string(file.bytes->begin(), file.bytes->end()));
     manifest["schemaVersion"] = "1.1";
-    manifest["coreCompatibility"]["minimum"] = "0.2.1";
+    manifest["coreCompatibility"]["minimum"] = "0.3.0";
     for (const auto& payload : files) {
       if (payload.path == "manifest.json") continue;
       manifest["files"][payload.path] = {
@@ -314,7 +314,7 @@ std::vector<BundleFile> valid_webgpu_bundle_files() {
     if (file.path != "manifest.json") continue;
     auto manifest = Json::parse(std::string(file.bytes->begin(), file.bytes->end()));
     manifest["schemaVersion"] = "1.2";
-    manifest["coreCompatibility"]["minimum"] = "0.2.1";
+    manifest["coreCompatibility"]["minimum"] = "0.3.0";
     for (const auto& payload : files) {
       if (payload.path == "manifest.json") continue;
       manifest["files"][payload.path] = {
@@ -431,7 +431,7 @@ LIGHT_OCR_TEST(model_bundle_rejects_unknown_provider_payload) {
   EXPECT_EQ(result.error().code, ErrorCode::invalid_model_bundle);
 }
 
-LIGHT_OCR_TEST(webgpu_fp16_strict_partition_fails_closed_before_session_load) {
+LIGHT_OCR_TEST(webgpu_fp16_is_not_a_public_execution_profile) {
   auto bundle = ModelBundle::create(valid_webgpu_bundle_files());
   EXPECT_TRUE(bundle);
   EngineOptions options;
@@ -447,15 +447,9 @@ LIGHT_OCR_TEST(webgpu_fp16_strict_partition_fails_closed_before_session_load) {
   auto engine = internal::EngineFactory::create(
       std::move(bundle).value(), options, std::move(policy));
   EXPECT_FALSE(engine);
-  EXPECT_EQ(engine.error().code, ErrorCode::unsupported_capability);
-  EXPECT_EQ(engine.error().message,
-            "The WebGPU model requires a bounded CPU operator partition");
-  EXPECT_EQ(engine.error().detail,
-            "required operators: Concat, Gather, Slice");
-  EXPECT_TRUE(engine.error().creation_trace.has_value());
-  EXPECT_EQ(engine.error().creation_trace->attempts.size(), 1u);
-  EXPECT_EQ(engine.error().creation_trace->attempts[0].creation_reason,
-            CreationReason::model_compute_unsupported);
+  EXPECT_EQ(engine.error().code, ErrorCode::invalid_argument);
+  EXPECT_EQ(engine.error().message, "Execution options are unsupported");
+  EXPECT_FALSE(engine.error().creation_trace.has_value());
 }
 
 LIGHT_OCR_TEST(model_bundle_rejects_schema_1_1_without_apple_provider) {
@@ -464,7 +458,7 @@ LIGHT_OCR_TEST(model_bundle_rejects_schema_1_1_without_apple_provider) {
     if (file.path != "manifest.json") continue;
     auto manifest = Json::parse(std::string(file.bytes->begin(), file.bytes->end()));
     manifest["schemaVersion"] = "1.1";
-    manifest["coreCompatibility"]["minimum"] = "0.2.1";
+    manifest["coreCompatibility"]["minimum"] = "0.3.0";
     file.bytes = bytes(manifest.dump());
     break;
   }
