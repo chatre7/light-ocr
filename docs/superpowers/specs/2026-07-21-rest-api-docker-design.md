@@ -181,6 +181,28 @@ services:
       - EXECUTION_MODE=cpu
 ```
 
+## Version management
+
+`@arcships/light-ocr` is pinned to an **exact version** in
+`server/package.json` (e.g. `"0.3.0"`, not `"^0.3.0"`), matching this repo's
+existing lockfile-driven convention (`corpus/*.lock.json`, `models/*.lock.json`,
+`oracle.lock.json`). Updates are manual, never auto-tracked, since a silent
+minor/patch bump could change OCR behavior without review.
+
+Update process when a new `@arcships/light-ocr` version is released:
+1. Bump the pinned version in `server/package.json`, run `npm install` to
+   regenerate `server/package-lock.json`, open a PR.
+2. `docker build` the image and re-run `server/test/ocr.test.js` against it to
+   check for regressions.
+3. Record the change in `CHANGELOG.md`, following the existing repo
+   convention.
+
+Docker image tags track the **server's own version** (e.g.
+`light-ocr-api:1.0.0`), not the wrapped `@arcships/light-ocr` version — the
+active engine version is discoverable at runtime via `GET /info`. `latest` is
+for local development only; production deployments should pin an explicit
+tag.
+
 ## Testing plan
 
 - `server/test/ocr.test.js` using `node --test` (matches the convention in
