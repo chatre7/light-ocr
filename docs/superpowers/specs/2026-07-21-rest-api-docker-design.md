@@ -144,7 +144,7 @@ Single-stage — no compilation needed since the npm package ships prebuilt
 native binaries + model bundle for the target platform:
 
 ```dockerfile
-FROM node:22-slim
+FROM node:22-trixie-slim
 
 WORKDIR /app
 
@@ -163,7 +163,7 @@ ENV QUEUE_CAPACITY=4
 CMD ["node", "src/server.js"]
 ```
 
-- `node:22-slim` matches `engines.node: "^22.0.0 || ^24.0.0"` and is
+- `node:22-trixie-slim` matches `engines.node: "^22.0.0 || ^24.0.0"` and is
   glibc-based, matching the target platform of the prebuilt native package.
 - Runs as non-root user `ocr`.
 - `.dockerignore` excludes `node_modules`, `test/`, `*.md`.

@@ -4,7 +4,7 @@
 
 **Goal:** Add a standalone Node.js/Express REST API server (`server/`) that wraps the published `@arcships/light-ocr` npm package, plus a Dockerfile to run it as a container.
 
-**Architecture:** A single Express app with three routes (`GET /health`, `GET /info`, `POST /ocr`) backed by one shared `OcrEngine` instance created at process startup. The engine's own `queueCapacity` provides backpressure; Express adds no extra queue. A single-stage `node:22-slim` Dockerfile installs the npm package (which ships prebuilt native binaries + model bundle) — no C++ compilation in the image.
+**Architecture:** A single Express app with three routes (`GET /health`, `GET /info`, `POST /ocr`) backed by one shared `OcrEngine` instance created at process startup. The engine's own `queueCapacity` provides backpressure; Express adds no extra queue. A single-stage `node:22-trixie-slim` Dockerfile installs the npm package (which ships prebuilt native binaries + model bundle) — no C++ compilation in the image.
 
 **Tech Stack:** Node.js (`^22.0.0 || ^24.0.0`), Express 5, Multer 2, `@arcships/light-ocr` (pinned exact version), `node:test` for tests, Docker.
 
@@ -14,7 +14,7 @@
 
 - Node engines: `^22.0.0 || ^24.0.0` (matches `bindings/node/package.json`).
 - `@arcships/light-ocr` pinned to the exact version `0.3.0` (verified via `npm view @arcships/light-ocr version`) — never a caret range.
-- Docker base image: `node:22-slim`.
+- Docker base image: `node:22-trixie-slim`.
 - Default env vars: `EXECUTION_MODE=cpu`, `QUEUE_CAPACITY=4`, `PORT=3000`.
 - `POST /ocr` accepts `multipart/form-data` with file field name `image`, max size `20 * 1024 * 1024` bytes (20MB).
 - Docker container runs as non-root user `ocr`.
@@ -781,7 +781,7 @@ git commit -m "feat(server): add entry point with graceful shutdown"
 - [ ] **Step 1: Create `server/Dockerfile`**
 
 ```dockerfile
-FROM node:22-slim
+FROM node:22-trixie-slim
 
 WORKDIR /app
 
